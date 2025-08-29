@@ -14,9 +14,11 @@ from livekit.agents import (
     WorkerOptions,
     cli,
     metrics,
+    get_job_context
 )
+from livekit import api
 from livekit.agents.llm import function_tool
-from livekit.plugins import cartesia, deepgram, noise_cancellation, openai, silero
+from livekit.plugins import cartesia, deepgram, noise_cancellation, openai, silero, elevenlabs
 from livekit.plugins.turn_detector.multilingual import MultilingualModel
 
 logger = logging.getLogger("agent")
@@ -31,11 +33,15 @@ class Assistant(Agent):
             You eagerly assist users with their questions by providing information from your extensive knowledge.
             Your responses are concise, to the point, and without any complex formatting or punctuation including emojis, asterisks, or other symbols.
             You are curious, friendly, and have a sense of humor.""",
+            stt=deepgram.STT(),
+            llm=openai.LLM(model="gpt-4o-mini"),
+            tts=elevenlabs.TTS(voice_id="H8bdWZHK2OgZwTN7ponr"),
+            turn_detection=MultilingualModel(),
         )
 
     # all functions annotated with @function_tool will be passed to the LLM when this
     # agent is active
-    @function_tool
+    @function_tool()
     async def lookup_weather(self, context: RunContext, location: str):
         """Use this tool to look up current weather information in the given location.
 
@@ -48,6 +54,25 @@ class Assistant(Agent):
         logger.info(f"Looking up weather for {location}")
 
         return "sunny with a temperature of 70 degrees."
+        
+    @function_tool
+    async def end_call(self, context: RunContext):
+        """When you decide to end the call after the end of conversation, use this tool."""
+
+        logger.info("Ending call")
+        await context.session.generate_reply(instructions="Thank you for calling. Goodbye!")
+        current_speech = context.session.current_speech
+        if current_speech is not None:
+            await current_speech.wait_for_playout()
+
+        # Stop any active recordings before ending the call
+        try:
+            job_ctx = get_job_context()
+            if job_ctx is not None:
+                await job_ctx.api.room.delete_room(api.DeleteRoomRequest(room=job_ctx.room.name))
+        except Exception as e:
+            logger.error(f"Error during call cleanup: {str(e)}")
+
 
 
 def prewarm(proc: JobProcess):
@@ -63,21 +88,7 @@ async def entrypoint(ctx: JobContext):
 
     # Set up a voice AI pipeline using OpenAI, Cartesia, Deepgram, and the LiveKit turn detector
     session = AgentSession(
-        # A Large Language Model (LLM) is your agent's brain, processing user input and generating a response
-        # See all providers at https://docs.livekit.io/agents/integrations/llm/
-        llm=openai.LLM(model="gpt-4o-mini"),
-        # Speech-to-text (STT) is your agent's ears, turning the user's speech into text that the LLM can understand
-        # See all providers at https://docs.livekit.io/agents/integrations/stt/
-        stt=deepgram.STT(model="nova-3", language="multi"),
-        # Text-to-speech (TTS) is your agent's voice, turning the LLM's text into speech that the user can hear
-        # See all providers at https://docs.livekit.io/agents/integrations/tts/
-        tts=cartesia.TTS(voice="6f84f4b8-58a2-430c-8c79-688dad597532"),
-        # VAD and turn detection are used to determine when the user is speaking and when the agent should respond
-        # See more at https://docs.livekit.io/agents/build/turns
-        turn_detection=MultilingualModel(),
         vad=ctx.proc.userdata["vad"],
-        # allow the LLM to generate a response while waiting for the end of turn
-        # See more at https://docs.livekit.io/agents/build/audio/#preemptive-generation
         preemptive_generation=True,
     )
 
