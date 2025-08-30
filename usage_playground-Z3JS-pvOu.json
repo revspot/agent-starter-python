@@ -1,0 +1,8 @@
+{
+  "llm_prompt_tokens": 823,
+  "llm_prompt_cached_tokens": 0,
+  "llm_completion_tokens": 42,
+  "tts_characters_count": 74,
+  "tts_audio_duration": 5.093877551020407,
+  "stt_audio_duration": 9.199999999999983
+}

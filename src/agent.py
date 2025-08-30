@@ -1,6 +1,7 @@
 import logging
 
 from dotenv import load_dotenv
+import json
 from livekit.agents import (
     NOT_GIVEN,
     Agent,
@@ -28,6 +29,7 @@ load_dotenv(".env.local")
 
 class Assistant(Agent):
     def __init__(self) -> None:
+        __name__ = "my-first-agent"
         super().__init__(
             instructions="""You are a helpful voice AI assistant.
             You eagerly assist users with their questions by providing information from your extensive knowledge.
@@ -38,6 +40,9 @@ class Assistant(Agent):
             tts=elevenlabs.TTS(voice_id="H8bdWZHK2OgZwTN7ponr"),
             turn_detection=MultilingualModel(),
         )
+
+    async def on_enter(self) -> None:
+        self.session.generate_reply(instructions="Hello, how can I help you today?")
 
     # all functions annotated with @function_tool will be passed to the LLM when this
     # agent is active
@@ -92,11 +97,10 @@ async def entrypoint(ctx: JobContext):
         preemptive_generation=True,
     )
 
-    # To use a realtime model instead of a voice pipeline, use the following session setup instead:
-    # session = AgentSession(
-    #     # See all providers at https://docs.livekit.io/agents/integrations/realtime/
-    #     llm=openai.realtime.RealtimeModel()
-    # )
+    async def write_transcript():
+        filename = f"transcript_{ctx.room.name}.json"
+        with open(filename, 'w') as f:
+            json.dump(session.history.to_dict(), f, indent=2)
 
     # sometimes background noise could interrupt the agent session, these are considered false positive interruptions
     # when it's detected, you may resume the agent's speech
@@ -114,19 +118,14 @@ async def entrypoint(ctx: JobContext):
         metrics.log_metrics(ev.metrics)
         usage_collector.collect(ev.metrics)
 
-    async def log_usage():
+    async def write_usage():
         summary = usage_collector.get_summary()
-        logger.info(f"Usage: {summary}")
+        filename = f"usage_{ctx.room.name}.json"
+        with open(filename, 'w') as f:
+            json.dump(summary.__dict__, f, indent=2)
 
-    ctx.add_shutdown_callback(log_usage)
-
-    # # Add a virtual avatar to the session, if desired
-    # # For other providers, see https://docs.livekit.io/agents/integrations/avatar/
-    # avatar = hedra.AvatarSession(
-    #   avatar_id="...",  # See https://docs.livekit.io/agents/integrations/avatar/hedra
-    # )
-    # # Start the avatar and wait for it to join
-    # await avatar.start(session, room=ctx.room)
+    ctx.add_shutdown_callback(write_usage)
+    ctx.add_shutdown_callback(write_transcript)
 
     # Start the session, which initializes the voice pipeline and warms up the models
     await session.start(
@@ -145,4 +144,4 @@ async def entrypoint(ctx: JobContext):
 
 
 if __name__ == "__main__":
-    cli.run_app(WorkerOptions(entrypoint_fnc=entrypoint, prewarm_fnc=prewarm))
+    cli.run_app(WorkerOptions(entrypoint_fnc=entrypoint, prewarm_fnc=prewarm, agent_name="my-first-agent"))
