@@ -29,9 +29,9 @@ memory:
 introduction: |
   (Wait 2 seconds after call pickup. If lead doesn’t speak, continue anyway.)
 
-  “Hi {{customer_name}}, this is Deepika from Meragi Celebrations.
+  “Hi Subham, this is Deepika from Meragi Celebrations.
   We’re a wedding solutions platform present in over 5 cities across India.
-  We received your enquiry that you are planning an event in {{city}}. Is that correct?”
+  We received your enquiry that you are planning an event in Bangalore. Is that correct?”
 
 discovery_questions:
   - whose_wedding: |

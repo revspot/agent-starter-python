@@ -67,9 +67,9 @@ logger = logging.getLogger("agent")
 load_dotenv(".env.local")
 
 
-class Assistant(Agent):
+class MeragiInboundAgent(Agent):
     def __init__(self) -> None:
-        # __name__ = "my-first-agent"
+        __name__ = "meragi_inbound_agent"
         super().__init__(
             instructions=full_prompt,
             stt=deepgram.STT(),
@@ -214,7 +214,7 @@ async def entrypoint(ctx: JobContext):
 
     # Start the session, which initializes the voice pipeline and warms up the models
     await session.start(
-        agent=Assistant(),
+        agent=MeragiInboundAgent(),
         room=ctx.room,
         room_input_options=RoomInputOptions(
             # LiveKit Cloud enhanced noise cancellation
@@ -230,4 +230,4 @@ async def entrypoint(ctx: JobContext):
 
 
 if __name__ == "__main__":
-    cli.run_app(WorkerOptions(entrypoint_fnc=entrypoint, prewarm_fnc=prewarm))
+    cli.run_app(WorkerOptions(entrypoint_fnc=entrypoint, prewarm_fnc=prewarm, agent_name=MeragiInboundAgent.__name__))
