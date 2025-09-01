@@ -1,0 +1,262 @@
+{
+  "items": [
+    {
+      "id": "item_48f39ee2a11d",
+      "type": "message",
+      "role": "user",
+      "content": [
+        "Hello."
+      ],
+      "interrupted": false,
+      "transcript_confidence": 0.80615234
+    },
+    {
+      "id": "item_3a05963dfb13",
+      "type": "message",
+      "role": "assistant",
+      "content": [
+        "Hi Deepika, this is Deepika from Meragi Celebrations. We\u2019re a wedding solutions platform present in over 5 cities across India. We received your enquiry that you are planning an event in Bangalore. Is that correct?"
+      ],
+      "interrupted": false
+    },
+    {
+      "id": "item_d9f86a212b0f",
+      "type": "message",
+      "role": "user",
+      "content": [
+        "Yes."
+      ],
+      "interrupted": false,
+      "transcript_confidence": 0.97143555
+    },
+    {
+      "id": "item_9e2faee1c85f",
+      "type": "message",
+      "role": "assistant",
+      "content": [
+        "May I know whose wedding is it?"
+      ],
+      "interrupted": false
+    },
+    {
+      "id": "item_06ac5815d883",
+      "type": "message",
+      "role": "user",
+      "content": [
+        "That's my brothers."
+      ],
+      "interrupted": false,
+      "transcript_confidence": 0.85058594
+    },
+    {
+      "id": "item_4e291f0fdd3f",
+      "type": "message",
+      "role": "assistant",
+      "content": [
+        "Congrats to you and your family! Could you tell me if you have finalised your wedding date?"
+      ],
+      "interrupted": false
+    },
+    {
+      "id": "item_f571039bd1c5",
+      "type": "message",
+      "role": "user",
+      "content": [
+        "My wedding date? Yes. It's on twenty second of September."
+      ],
+      "interrupted": false,
+      "transcript_confidence": 0.99560547
+    },
+    {
+      "id": "item_566958bb03a3",
+      "type": "message",
+      "role": "assistant",
+      "content": [
+        "Sure, got it. Have you finalised your venue?"
+      ],
+      "interrupted": false
+    },
+    {
+      "id": "item_47bca147bb88",
+      "type": "message",
+      "role": "user",
+      "content": [
+        "Yeah. It's at Lila in there, Nava."
+      ],
+      "interrupted": false,
+      "transcript_confidence": 0.717224115
+    },
+    {
+      "id": "item_385e4532290f",
+      "type": "message",
+      "role": "assistant",
+      "content": [
+        "Thanks for sharing. What events are you planning? And, how many total guests are expected across all events?"
+      ],
+      "interrupted": false
+    },
+    {
+      "id": "item_cf39dd0d041f",
+      "type": "message",
+      "role": "user",
+      "content": [
+        "I'm planning for wedding and reception."
+      ],
+      "interrupted": false,
+      "transcript_confidence": 0.9848633
+    },
+    {
+      "id": "item_5aabb313df0a",
+      "type": "message",
+      "role": "user",
+      "content": [
+        "And total expected guests are four hundred."
+      ],
+      "interrupted": false,
+      "transcript_confidence": 0.9433594
+    },
+    {
+      "id": "item_58cb69d5f951",
+      "type": "message",
+      "role": "assistant",
+      "content": [
+        "And what is your budget?"
+      ],
+      "interrupted": false
+    },
+    {
+      "id": "item_7afb34b9c3f6",
+      "type": "message",
+      "role": "user",
+      "content": [
+        "I have an open budget for now."
+      ],
+      "interrupted": false,
+      "transcript_confidence": 0.99316406
+    },
+    {
+      "id": "item_257d8d873e02",
+      "type": "message",
+      "role": "assistant",
+      "content": [
+        "No problem. To give you a better estimate, could you please confirm the number of events and the total guest count?\n"
+      ],
+      "interrupted": false
+    },
+    {
+      "id": "item_2d830292d59c",
+      "type": "message",
+      "role": "user",
+      "content": [
+        "I'm planning for two events."
+      ],
+      "interrupted": false,
+      "transcript_confidence": 0.98950195
+    },
+    {
+      "id": "item_da7369228e7a",
+      "type": "message",
+      "role": "user",
+      "content": [
+        "The total guest count is four hundred."
+      ],
+      "interrupted": false,
+      "transcript_confidence": 0.9951172
+    },
+    {
+      "id": "item_8122713f0d9a",
+      "type": "message",
+      "role": "user",
+      "content": [
+        "Hello?"
+      ],
+      "interrupted": false,
+      "transcript_confidence": 0.89941406
+    },
+    {
+      "id": "item_722f2b227b91",
+      "type": "message",
+      "role": "assistant",
+      "content": [
+        "Thanks for confirming. I'll just calculate that for you.\n"
+      ],
+      "interrupted": false
+    },
+    {
+      "id": "item_363a55253d3b",
+      "type": "message",
+      "role": "assistant",
+      "content": [
+        "I see. Based on your plans for two events with 400 guests in Bangalore, the estimated budget is 5.2 Lakhs. Does that sound about right for your planning purposes?"
+      ],
+      "interrupted": false
+    },
+    {
+      "id": "item_abced1ed213f",
+      "type": "message",
+      "role": "user",
+      "content": [
+        "Yeah. That's fine."
+      ],
+      "interrupted": false,
+      "transcript_confidence": 0.970459
+    },
+    {
+      "id": "item_a0ba01753ff1",
+      "type": "message",
+      "role": "user",
+      "content": [
+        "Thank you."
+      ],
+      "interrupted": false,
+      "transcript_confidence": 1.0
+    },
+    {
+      "id": "item_02cb3053f332",
+      "type": "message",
+      "role": "assistant",
+      "content": [
+        "Great! Since your estimated budget falls within our qualification range, would you be interested in a consultation with a Meragi Wedding Expert? They can help you with personalized recommendations and streamline your planning. We have an opening for a call tomorrow at 11 AM, or would another time be more convenient for you?"
+      ],
+      "interrupted": false
+    },
+    {
+      "id": "item_48f0282b83bb",
+      "type": "message",
+      "role": "user",
+      "content": [
+        "No. Tomorrow, eleven AM is fine. Thank you."
+      ],
+      "interrupted": false,
+      "transcript_confidence": 0.9951172
+    },
+    {
+      "id": "item_cd22a9b8e831",
+      "type": "message",
+      "role": "assistant",
+      "content": [
+        "Sure, I've booked you for tomorrow at 11 AM. You'll receive a confirmation shortly. Thank you for choosing Meragi Celebrations! We're excited to help make your brother's wedding a memorable one. Have a great day!\n"
+      ],
+      "interrupted": false
+    },
+    {
+      "id": "item_94ff05820615",
+      "type": "message",
+      "role": "user",
+      "content": [
+        "Thank you. Can we close this call?"
+      ],
+      "interrupted": false,
+      "transcript_confidence": 0.9851074
+    },
+    {
+      "id": "item_965e274be723",
+      "type": "message",
+      "role": "assistant",
+      "content": [
+        "Of course. Have a great day!\n"
+      ],
+      "interrupted": false
+    }
+  ]
+}

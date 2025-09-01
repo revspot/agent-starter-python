@@ -1,6 +1,14 @@
 import logging
+import os
+import yaml
+
+with open("prompts/deepika_agent.yaml") as f:
+    data = yaml.safe_load(f)
+
+full_prompt = data["agent_prompt"]
 
 from dotenv import load_dotenv
+import json
 from livekit.agents import (
     NOT_GIVEN,
     Agent,
@@ -14,9 +22,12 @@ from livekit.agents import (
     WorkerOptions,
     cli,
     metrics,
+    get_job_context,
+    AutoSubscribe,
 )
+from livekit import api
 from livekit.agents.llm import function_tool
-from livekit.plugins import cartesia, deepgram, noise_cancellation, openai, silero, google
+from livekit.plugins import cartesia, deepgram, noise_cancellation, openai, silero, elevenlabs
 from livekit.plugins.turn_detector.multilingual import MultilingualModel
 
 logger = logging.getLogger("agent")
@@ -26,16 +37,24 @@ load_dotenv(".env.local")
 
 class Assistant(Agent):
     def __init__(self) -> None:
+        # __name__ = "my-first-agent"
         super().__init__(
             instructions="""You are a helpful voice AI assistant.
             You eagerly assist users with their questions by providing information from your extensive knowledge.
             Your responses are concise, to the point, and without any complex formatting or punctuation including emojis, asterisks, or other symbols.
             You are curious, friendly, and have a sense of humor.""",
+            stt=deepgram.STT(),
+            llm=openai.LLM(model="gpt-4o-mini"),
+            tts=elevenlabs.TTS(voice_id="H8bdWZHK2OgZwTN7ponr"),
+            turn_detection=MultilingualModel(),
         )
+
+    async def on_enter(self) -> None:
+        self.session.generate_reply(instructions="Hello, how can I help you today?")
 
     # all functions annotated with @function_tool will be passed to the LLM when this
     # agent is active
-    @function_tool
+    @function_tool()
     async def lookup_weather(self, context: RunContext, location: str):
         """Use this tool to look up current weather information in the given location.
 
@@ -48,6 +67,25 @@ class Assistant(Agent):
         logger.info(f"Looking up weather for {location}")
 
         return "sunny with a temperature of 70 degrees."
+        
+    @function_tool
+    async def end_call(self, context: RunContext):
+        """When you decide to end the call after the end of conversation, use this tool."""
+
+        logger.info("Ending call")
+        await context.session.generate_reply(instructions="Thank you for calling. Goodbye!")
+        current_speech = context.session.current_speech
+        if current_speech is not None:
+            await current_speech.wait_for_playout()
+
+        # Stop any active recordings before ending the call
+        try:
+            job_ctx = get_job_context()
+            if job_ctx is not None:
+                await job_ctx.api.room.delete_room(api.DeleteRoomRequest(room=job_ctx.room.name))
+        except Exception as e:
+            logger.error(f"Error during call cleanup: {str(e)}")
+
 
 
 def prewarm(proc: JobProcess):
@@ -61,32 +99,36 @@ async def entrypoint(ctx: JobContext):
         "room": ctx.room.name,
     }
 
+    req = api.RoomCompositeEgressRequest(
+        room_name=ctx.room.name,
+        layout="grid",
+        audio_only=True,
+        file_outputs=[
+            api.EncodedFileOutput(
+                file_type=api.EncodedFileType.MP4,
+                filepath=f"output_{ctx.room.name}.mp4",
+                s3=api.S3Upload(
+                    access_key=os.getenv("AWS_ACCESS_KEY_ID"),
+                    secret=os.getenv("AWS_SECRET_ACCESS_KEY"),
+                    bucket=os.getenv("S3_RECORDING_BUCKET"),
+                    region=os.getenv("S3_RECORDING_REGION"),   # pick your S3 bucket region
+                ),
+            ),
+        ],
+    )
+
+    # await ctx.connect(auto_subscribe=AutoSubscribe.AUDIO_ONLY)
+
     # Set up a voice AI pipeline using OpenAI, Cartesia, Deepgram, and the LiveKit turn detector
     session = AgentSession(
-        # A Large Language Model (LLM) is your agent's brain, processing user input and generating a response
-        # See all providers at https://docs.livekit.io/agents/integrations/llm/
-        # llm=openai.LLM(model="gpt-4o-mini"),
-        llm=google.LLM(model="gemini-2.5-flash-lite"),
-        # Speech-to-text (STT) is your agent's ears, turning the user's speech into text that the LLM can understand
-        # See all providers at https://docs.livekit.io/agents/integrations/stt/
-        stt=deepgram.STT(model="nova-3", language="multi"),
-        # Text-to-speech (TTS) is your agent's voice, turning the LLM's text into speech that the user can hear
-        # See all providers at https://docs.livekit.io/agents/integrations/tts/
-        tts=cartesia.TTS(voice="6f84f4b8-58a2-430c-8c79-688dad597532"),
-        # VAD and turn detection are used to determine when the user is speaking and when the agent should respond
-        # See more at https://docs.livekit.io/agents/build/turns
-        turn_detection=MultilingualModel(),
         vad=ctx.proc.userdata["vad"],
-        # allow the LLM to generate a response while waiting for the end of turn
-        # See more at https://docs.livekit.io/agents/build/audio/#preemptive-generation
         preemptive_generation=True,
     )
 
-    # To use a realtime model instead of a voice pipeline, use the following session setup instead:
-    # session = AgentSession(
-    #     # See all providers at https://docs.livekit.io/agents/integrations/realtime/
-    #     llm=openai.realtime.RealtimeModel()
-    # )
+    async def write_transcript():
+        filename = f"transcript_{ctx.room.name}.json"
+        with open(filename, 'w') as f:
+            json.dump(session.history.to_dict(), f, indent=2)
 
     # sometimes background noise could interrupt the agent session, these are considered false positive interruptions
     # when it's detected, you may resume the agent's speech
@@ -104,19 +146,17 @@ async def entrypoint(ctx: JobContext):
         metrics.log_metrics(ev.metrics)
         usage_collector.collect(ev.metrics)
 
-    async def log_usage():
+    async def write_usage():
         summary = usage_collector.get_summary()
-        logger.info(f"Usage: {summary}")
+        filename = f"usage_{ctx.room.name}.json"
+        with open(filename, 'w') as f:
+            json.dump(summary.__dict__, f, indent=2)
 
-    ctx.add_shutdown_callback(log_usage)
+    ctx.add_shutdown_callback(write_usage)
+    ctx.add_shutdown_callback(write_transcript)
 
-    # # Add a virtual avatar to the session, if desired
-    # # For other providers, see https://docs.livekit.io/agents/integrations/avatar/
-    # avatar = hedra.AvatarSession(
-    #   avatar_id="...",  # See https://docs.livekit.io/agents/integrations/avatar/hedra
-    # )
-    # # Start the avatar and wait for it to join
-    # await avatar.start(session, room=ctx.room)
+    lkapi = api.LiveKitAPI()
+    res = await lkapi.egress.start_room_composite_egress(req)
 
     # Start the session, which initializes the voice pipeline and warms up the models
     await session.start(
@@ -132,6 +172,7 @@ async def entrypoint(ctx: JobContext):
 
     # Join the room and connect to the user
     await ctx.connect()
+    await lkapi.aclose()
 
 
 if __name__ == "__main__":
