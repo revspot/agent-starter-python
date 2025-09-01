@@ -1,6 +1,8 @@
 import logging
 import os
 import yaml
+import boto3
+import tempfile
 
 # with open("prompts/deepika_agent.yaml") as f:
 #     data = yaml.safe_load(f)
@@ -67,9 +69,9 @@ logger = logging.getLogger("agent")
 load_dotenv(".env.local")
 
 
-class MeragiInboundAgent(Agent):
+class Agent(Agent):
     def __init__(self) -> None:
-        __name__ = "meragi_inbound_agent"
+        # __name__ = "meragi_inbound_agent"
         super().__init__(
             instructions=full_prompt,
             stt=deepgram.STT(),
@@ -160,7 +162,7 @@ async def entrypoint(ctx: JobContext):
         file_outputs=[
             api.EncodedFileOutput(
                 file_type=api.EncodedFileType.MP4,
-                filepath=f"output_{ctx.room.name}.mp4",
+                filepath=f"{ctx.room.name}/output_{ctx.room.name}.mp4",
                 s3=api.S3Upload(
                     access_key=os.getenv("AWS_ACCESS_KEY_ID"),
                     secret=os.getenv("AWS_SECRET_ACCESS_KEY"),
@@ -179,10 +181,31 @@ async def entrypoint(ctx: JobContext):
         preemptive_generation=True,
     )
 
+    # async def write_transcript():
+    #     filename = f"transcript_{ctx.room.name}.json"
+    #     with open(filename, 'w') as f:
+    #         json.dump(session.history.to_dict(), f, indent=2)
+
     async def write_transcript():
-        filename = f"transcript_{ctx.room.name}.json"
-        with open(filename, 'w') as f:
-            json.dump(session.history.to_dict(), f, indent=2)
+        s3_bucket = os.getenv("S3_RECORDING_BUCKET")
+        s3_region = os.getenv("S3_RECORDING_REGION")
+        s3_access_key = os.getenv("AWS_ACCESS_KEY_ID")
+        s3_secret_key = os.getenv("AWS_SECRET_ACCESS_KEY")
+
+        try:
+            s3_client = boto3.client(
+                "s3",
+                region_name=s3_region,
+                aws_access_key_id=s3_access_key,
+                aws_secret_access_key=s3_secret_key,
+            )
+            s3_key = f"{ctx.room.name}/transcript_{ctx.room.name}.json"
+            with tempfile.NamedTemporaryFile("w+", delete=False) as tmpf:
+                json.dump(session.history.to_dict(), tmpf, indent=2)
+                tmpf.flush()
+                s3_client.upload_file(tmpf.name, s3_bucket, s3_key)
+        except Exception as e:
+            logger.error(f"Failed to upload transcript to S3: {e}")
 
     # sometimes background noise could interrupt the agent session, these are considered false positive interruptions
     # when it's detected, you may resume the agent's speech
@@ -200,11 +223,34 @@ async def entrypoint(ctx: JobContext):
         metrics.log_metrics(ev.metrics)
         usage_collector.collect(ev.metrics)
 
+    # async def write_usage():
+    #     summary = usage_collector.get_summary()
+    #     filename = f"usage_{ctx.room.name}.json"
+    #     with open(filename, 'w') as f:
+    #         json.dump(summary.__dict__, f, indent=2)
+
     async def write_usage():
         summary = usage_collector.get_summary()
-        filename = f"usage_{ctx.room.name}.json"
-        with open(filename, 'w') as f:
-            json.dump(summary.__dict__, f, indent=2)
+
+        s3_bucket = os.getenv("S3_RECORDING_BUCKET")
+        s3_region = os.getenv("S3_RECORDING_REGION")
+        s3_access_key = os.getenv("AWS_ACCESS_KEY_ID")
+        s3_secret_key = os.getenv("AWS_SECRET_ACCESS_KEY")
+
+        try:
+            s3_client = boto3.client(
+                "s3",
+                region_name=s3_region,
+                aws_access_key_id=s3_access_key,
+                aws_secret_access_key=s3_secret_key,
+            )
+            s3_key = f"{ctx.room.name}/usage_{ctx.room.name}.json"
+            with tempfile.NamedTemporaryFile("w+", delete=False) as tmpf:
+                json.dump(summary.__dict__, tmpf, indent=2)
+                tmpf.flush()
+                s3_client.upload_file(tmpf.name, s3_bucket, s3_key)
+        except Exception as e:
+            logger.error(f"Failed to upload usage to S3: {e}")
 
     ctx.add_shutdown_callback(write_usage)
     ctx.add_shutdown_callback(write_transcript)
@@ -214,7 +260,7 @@ async def entrypoint(ctx: JobContext):
 
     # Start the session, which initializes the voice pipeline and warms up the models
     await session.start(
-        agent=MeragiInboundAgent(),
+        agent=Agent(),
         room=ctx.room,
         room_input_options=RoomInputOptions(
             # LiveKit Cloud enhanced noise cancellation
@@ -230,4 +276,4 @@ async def entrypoint(ctx: JobContext):
 
 
 if __name__ == "__main__":
-    cli.run_app(WorkerOptions(entrypoint_fnc=entrypoint, prewarm_fnc=prewarm, agent_name=MeragiInboundAgent.__name__))
+    cli.run_app(WorkerOptions(entrypoint_fnc=entrypoint, prewarm_fnc=prewarm))
