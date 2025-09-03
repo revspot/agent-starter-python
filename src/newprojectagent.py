@@ -6,7 +6,7 @@ from livekit import api
 
 
 class NewProjectAgent(Agent):
-    """Specialized agent for mathematical calculations"""
+    """Specialized agent for new project"""
 
     def __init__(self, chat_ctx=None):
         __name__ = "new-project-agent"
@@ -21,7 +21,7 @@ class NewProjectAgent(Agent):
 
     async def on_enter(self) -> None:
         await self.session.generate_reply(
-            instructions="Introduce yourself as a math specialist and ask what calculation you can help with.",
+            instructions="Introduce yourself as Varsha from the New Project team and ask how you can help them get started with their new home interior project.",
             allow_interruptions=True,
         )
 
@@ -30,7 +30,7 @@ class NewProjectAgent(Agent):
         """Return control back to the main assistant.
 
         Use this when the user wants to go back to general assistance or
-        needs help with something other than math.
+        needs help with something other than new project.
         """
         from agent import LivspaceAgent
 
