@@ -34,45 +34,50 @@ from livekit import api
 from livekit.agents.llm import function_tool
 from livekit.plugins import cartesia, deepgram, noise_cancellation, openai, silero, elevenlabs, google
 from livekit.plugins.turn_detector.multilingual import MultilingualModel
+from constants import MASTER_INSTRUCTIONS
+from projectagent import ProjectAgent
+from newprojectagent import NewProjectAgent
 
-logger = logging.getLogger("agent")
+logger = logging.getLogger("livspace-agent")
 
 load_dotenv(".env.local")
 
 
-class Assistant(Agent):
-    def __init__(self) -> None:
+class LivspaceAgent(Agent):
+    def __init__(self, chat_ctx=None) -> None:
 
         super().__init__(
-            instructions="""You are a helpful voice AI assistant.
-            You eagerly assist users with their questions by providing information from your extensive knowledge.
-            Your responses are concise, to the point, and without any complex formatting or punctuation including emojis, asterisks, or other symbols.
-            You are curious, friendly, and have a sense of humor.""",
+            instructions=MASTER_INSTRUCTIONS,
             stt=deepgram.STT(),
-
-            llm=google.LLM(model="gemini-1.5-flash"),
+            llm=google.LLM(model="gemini-2.5-flash-lite"),
             tts=elevenlabs.TTS(voice_id="H8bdWZHK2OgZwTN7ponr"),
             turn_detection=MultilingualModel(),
+            chat_ctx=chat_ctx,
         )
 
     async def on_enter(self) -> None:
-        self.session.generate_reply(instructions="Hello, how can I help you today?")
+        self.session.generate_reply(instructions=MASTER_INSTRUCTIONS)
 
     # all functions annotated with @function_tool will be passed to the LLM when this
     # agent is active
+    
     @function_tool
-    async def lookup_weather(self, context: RunContext, location: str):
-        """Use this tool to look up current weather information in the given location.
+    async def get_customer_project_details(self, context: RunContext, customer_name: str = "Subham"):
+        """Use this tool to lookup the project details for the customer."""
+        logger.info(f"Looking up project details for {customer_name}")
+        return f"Thank you, {customer_name}. I have your project details. I am now connecting you to our Project Support team who can best assist you with your query. Please stay on the line."
 
-        If the location is not supported by the weather service, the tool will indicate this. You must tell the user the location's weather is unavailable.
+    @function_tool
+    async def transfer_to_project_support(self, context: RunContext):
+        """Transfer the call to the Project Support team."""
+        logger.info("Transferring call to Project Support team")
+        return "Transferred to Project Support team", ProjectAgent(chat_ctx=self.chat_ctx)
 
-        Args:
-            location: The location to look up weather information for (e.g. city name)
-        """
-
-        logger.info(f"Looking up weather for {location}")
-
-        return "sunny with a temperature of 70 degrees."
+    @function_tool
+    async def transfer_to_new_project_team(self, context: RunContext):
+        """Transfer the call to the New Project team."""
+        logger.info("Transferring call to New Project team")
+        return "Transferred to New Project team", NewProjectAgent(chat_ctx=self.chat_ctx)
         
     @function_tool
     async def end_call(self, context: RunContext):
@@ -106,11 +111,16 @@ async def entrypoint(ctx: JobContext):
     }
 
     # Helper to write event-specific JSON files in the room folder
-    def write_event_json(data: dict):
-        filename = os.path.join(f"session_events_{ctx.room.name}.jsonl")
+    def write_event_json(data: dict, filename: str = None):
+        if filename is None:
+            filename = os.path.join(f"session_events_{ctx.room.name}.jsonl")
+        else:
+            filename = os.path.join(f"{filename}_{ctx.room.name}.jsonl")
         with open(filename, "a") as f:  # "a" mode for append
             json.dump(data, f)
             f.write("\n")  # Add newline after each JSON object
+
+        return filename
 
     req = api.RoomCompositeEgressRequest(
         room_name=ctx.room.name,
@@ -146,7 +156,8 @@ async def entrypoint(ctx: JobContext):
     def _on_agent_false_interruption(ev: AgentFalseInterruptionEvent):
         logger.info("false positive interruption, resuming")
         session.generate_reply(instructions=ev.extra_instructions or NOT_GIVEN)
-        write_event_json(ev.model_dump())
+        filename = write_event_json(ev.model_dump())
+        logger.info(f"Agent false interruption: {filename}")
 
     # Metrics collection, to measure pipeline performance
     # For more information, see https://docs.livekit.io/agents/build/metrics/
@@ -156,39 +167,48 @@ async def entrypoint(ctx: JobContext):
     def _on_metrics_collected(ev: MetricsCollectedEvent):
         metrics.log_metrics(ev.metrics)
         usage_collector.collect(ev.metrics)
-        write_event_json(ev.model_dump())
+        filename = write_event_json(ev.model_dump())
+        logger.info(f"Metrics collected: {filename}")
 
     @session.on("speech_created")
     def _on_speech_created(ev: SpeechCreatedEvent):
-        write_event_json(ev.model_dump())
+        filename = write_event_json(ev.model_dump())
+        logger.info(f"Speech created: {filename}")
 
     @session.on("user_state_changed")
     def _on_user_state_changed(ev: UserStateChangedEvent):
-        write_event_json(ev.model_dump())
+        filename = write_event_json(ev.model_dump())
+        logger.info(f"User state changed: {filename}")
 
     @session.on("user_input_transcribed")
     def _on_user_input_transcribed(ev: UserInputTranscribedEvent):
-        write_event_json(ev.model_dump())
+        filename = write_event_json(ev.model_dump())
+        logger.info(f"User input transcribed: {filename}")
 
     @session.on("conversation_item_added")
     def _on_conversation_item_added(ev: ConversationItemAddedEvent):
-        write_event_json(ev.model_dump())
+        filename = write_event_json(ev.model_dump())
+        logger.info(f"Conversation item added: {filename}")
 
     @session.on("function_tools_executed")
     def _on_function_tools_executed(ev: FunctionToolsExecutedEvent):
-        write_event_json(ev.model_dump())
+        filename = write_event_json(ev.model_dump())
+        logger.info(f"Function tools executed: {filename}")
 
     @session.on("agent_state_changed")
     def _on_agent_state_changed(ev: AgentStateChangedEvent):
-        write_event_json(ev.model_dump())
+        filename = write_event_json(ev.model_dump())
+        logger.info(f"Agent state changed: {filename}")
     
     @session.on("error")
     def _on_error(ev: ErrorEvent):
-        write_event_json(ev.model_dump())
+        filename = write_event_json(ev.model_dump())
+        logger.info(f"Error: {filename}")
     
     @session.on("close")
     def _on_close(ev: CloseEvent):
-        write_event_json(ev.model_dump())
+        filename = write_event_json(ev.model_dump())
+        logger.info(f"Close: {filename}")
     
 
 
@@ -207,9 +227,9 @@ async def entrypoint(ctx: JobContext):
             )
             
             # Write final transcript and usage data to the single JSONL file
-            write_event_json(session.history.to_dict())
+            transcript_filename = write_event_json(session.history.to_dict(), "transcript")
             summary = usage_collector.get_summary()
-            write_event_json(summary.__dict__)
+            summary_filename = write_event_json(summary.__dict__, "summary")
             
             # Upload the single JSONL file to the same S3 folder as egress
             jsonl_filename = f"session_events_{ctx.room.name}.jsonl"
@@ -217,10 +237,14 @@ async def entrypoint(ctx: JobContext):
             
             if os.path.exists(jsonl_filename):
                 s3_client.upload_file(jsonl_filename, s3_bucket, s3_key)
+                s3_client.upload_file(transcript_filename, s3_bucket, f"{ctx.room.name}/{transcript_filename}")
+                s3_client.upload_file(summary_filename, s3_bucket, f"{ctx.room.name}/{summary_filename}")
                 logger.info(f"Uploaded events to s3://{s3_bucket}/{s3_key}")
                 
                 # Delete the local JSONL file after successful upload
                 os.remove(jsonl_filename)
+                os.remove(transcript_filename)
+                os.remove(summary_filename)
                 logger.info(f"Deleted local file: {jsonl_filename}")
             else:
                 logger.warning(f"JSONL file {jsonl_filename} not found for upload")
@@ -237,7 +261,7 @@ async def entrypoint(ctx: JobContext):
 
     # Start the session, which initializes the voice pipeline and warms up the models
     await session.start(
-        agent=Assistant(),
+        agent=LivspaceAgent(),
         room=ctx.room,
         room_input_options=RoomInputOptions(
             # LiveKit Cloud enhanced noise cancellation
@@ -253,4 +277,5 @@ async def entrypoint(ctx: JobContext):
 
 
 if __name__ == "__main__":
+    # cli.run_app(WorkerOptions(entrypoint_fnc=entrypoint, prewarm_fnc=prewarm, agent_name="livspace-agent"))
     cli.run_app(WorkerOptions(entrypoint_fnc=entrypoint, prewarm_fnc=prewarm))
