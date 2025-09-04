@@ -1,6 +1,6 @@
 import logging
 import os
-from typing import Literal
+from typing import Literal, Optional
 
 import boto3
 import tempfile
@@ -71,13 +71,13 @@ class LivspaceAgent(Agent):
     async def transfer_to_project_support(self, context: RunContext):
         """Transfer the call to the Project Support team."""
         logger.info("Transferring call to Project Support team")
-        return "Transferred to Project Support team", ProjectAgent(chat_ctx=self.chat_ctx)
+        return ProjectAgent(chat_ctx=self.chat_ctx)
 
     @function_tool
     async def transfer_to_new_project_team(self, context: RunContext):
         """Transfer the call to the New Project team."""
         logger.info("Transferring call to New Project team")
-        return "Transferred to New Project team", NewProjectAgent(chat_ctx=self.chat_ctx)
+        return NewProjectAgent(chat_ctx=self.chat_ctx)
         
     @function_tool
     async def end_call(self, context: RunContext):
@@ -270,12 +270,9 @@ async def entrypoint(ctx: JobContext):
             noise_cancellation=noise_cancellation.BVC(),
         ),
     )
-
-    # Join the room and connect to the user
-    await ctx.connect()
     await lkapi.aclose()
 
 
 if __name__ == "__main__":
-    # cli.run_app(WorkerOptions(entrypoint_fnc=entrypoint, prewarm_fnc=prewarm, agent_name="livspace-agent"))
-    cli.run_app(WorkerOptions(entrypoint_fnc=entrypoint, prewarm_fnc=prewarm))
+    cli.run_app(WorkerOptions(entrypoint_fnc=entrypoint, prewarm_fnc=prewarm, agent_name="livspace-agent"))
+    # cli.run_app(WorkerOptions(entrypoint_fnc=entrypoint, prewarm_fnc=prewarm))
