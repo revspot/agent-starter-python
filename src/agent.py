@@ -1,9 +1,11 @@
+from __future__ import annotations
+
 import logging
 import os
-from typing import Literal, Optional
+from typing import Optional, Any
+import asyncio
 
 import boto3
-import tempfile
 from dotenv import load_dotenv
 import json
 from livekit.agents import (
@@ -29,10 +31,10 @@ from livekit.agents import (
     metrics,
     get_job_context,
 )
-from livekit import api
+from livekit import api, rtc
 
 from livekit.agents.llm import function_tool
-from livekit.plugins import cartesia, deepgram, noise_cancellation, openai, silero, elevenlabs, google
+from livekit.plugins import deepgram, noise_cancellation, openai, silero, elevenlabs, google
 from livekit.plugins.turn_detector.multilingual import MultilingualModel
 from constants import MASTER_INSTRUCTIONS
 from projectagent import ProjectAgent
@@ -44,7 +46,9 @@ load_dotenv(".env.local")
 
 
 class LivspaceAgent(Agent):
-    def __init__(self, chat_ctx=None) -> None:
+    def __init__(self,
+                 chat_ctx=None,
+                 dial_info=dict[str, Any]) -> None:
 
         super().__init__(
             instructions=MASTER_INSTRUCTIONS,
@@ -54,6 +58,9 @@ class LivspaceAgent(Agent):
             turn_detection=MultilingualModel(),
             chat_ctx=chat_ctx,
         )
+
+        self.dial_info = dial_info
+        self.participant: rtc.RemoteParticipant | None = None
 
     async def on_enter(self) -> None:
         self.session.generate_reply(instructions=MASTER_INSTRUCTIONS)
@@ -97,6 +104,8 @@ class LivspaceAgent(Agent):
         except Exception as e:
             logger.error(f"Error during call cleanup: {str(e)}")
 
+    def set_participant(self, participant: rtc.RemoteParticipant):
+        self.participant = participant
 
 
 def prewarm(proc: JobProcess):
@@ -109,6 +118,12 @@ async def entrypoint(ctx: JobContext):
     ctx.log_context_fields = {
         "room": ctx.room.name,
     }
+    logger.info(f"connecting to room {ctx.room.name}")
+    await ctx.connect()
+    logger.info(f"connected to room {ctx.room.name}")
+
+    dial_info = json.loads(ctx.job.metadata)
+    participant_identity = phone_number = dial_info.get("phone_number")
 
     # Helper to write event-specific JSON files in the room folder
     def write_event_json(data: dict, filename: str = None):
@@ -259,18 +274,44 @@ async def entrypoint(ctx: JobContext):
     lkapi = api.LiveKitAPI()
     res = await lkapi.egress.start_room_composite_egress(req)
 
+    agent = LivspaceAgent(dial_info=dial_info)
+
     # Start the session, which initializes the voice pipeline and warms up the models
-    await session.start(
-        agent=LivspaceAgent(),
-        room=ctx.room,
-        room_input_options=RoomInputOptions(
-            # LiveKit Cloud enhanced noise cancellation
-            # - If self-hosting, omit this parameter
-            # - For telephony applications, use `BVCTelephony` for best results
-            noise_cancellation=noise_cancellation.BVC(),
-        ),
+    session_started = asyncio.create_task(
+        session.start(
+            agent=agent,
+            room=ctx.room,
+            room_input_options=RoomInputOptions(
+                # LiveKit Cloud enhanced noise cancellation
+                # - If self-hosting, omit this parameter
+                # - For telephony applications, use `BVCTelephony` for best results
+                noise_cancellation=noise_cancellation.BVCTelephony(),
+            ),
+        )
     )
-    await lkapi.aclose()
+    try:
+        await ctx.api.sip.create_sip_participant(
+            api.CreateSIPParticipantRequest(
+                room_name=ctx.room.name,
+                sip_trunk_id=os.getenv("SIP_OUTBOUND_TRUNK_ID"),
+                sip_call_to=phone_number,
+                participant_identity=participant_identity,
+                wait_until_answered=True,
+            )
+        )
+
+        await session_started
+        participant = await ctx.wait_for_participant(identity=participant_identity)
+        logger.info(f"participant joined: {participant.identity}")
+
+        agent.set_participant(participant)
+        await lkapi.aclose()
+        
+    except Exception as e:
+        logger.error(f"Failed to create SIP participant: {e}")
+        ctx.shutdown()
+        await lkapi.aclose()
+        return
 
 
 if __name__ == "__main__":

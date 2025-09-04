@@ -1,3 +1,5 @@
+from __future__ import annotations
+from typing import Any
 from livekit.agents import Agent, function_tool, RunContext, get_job_context
 from livekit.plugins import deepgram, openai, elevenlabs, google
 from livekit.plugins.turn_detector.multilingual import MultilingualModel
