@@ -49,7 +49,7 @@ class LivspaceAgent(Agent):
     def __init__(self,
                  chat_ctx=None,
                  dial_info=dict[str, Any]) -> None:
-
+        self.__name__ = "livspace-agent"
         super().__init__(
             instructions=MASTER_INSTRUCTIONS,
             stt=deepgram.STT(),

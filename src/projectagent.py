@@ -11,7 +11,7 @@ class ProjectAgent(Agent):
     """Specialized agent for project support"""
 
     def __init__(self, chat_ctx=None):
-        __name__ = "project-agent"
+        self.__name__ = "project-agent"
         super().__init__(
             instructions=PROJECT_SUPPORT_INSTRUCTIONS,
             stt=deepgram.STT(),
