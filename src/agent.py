@@ -124,6 +124,7 @@ async def entrypoint(ctx: JobContext):
 
     dial_info = json.loads(ctx.job.metadata)
     participant_identity = phone_number = dial_info.get("phone_number")
+    logger.info(f"dial_info: {dial_info}")
 
     # Helper to write event-specific JSON files in the room folder
     def write_event_json(data: dict, filename: str = None):

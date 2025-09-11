@@ -35,8 +35,10 @@ from livekit.agents import (
 from livekit import api, rtc
 
 from livekit.agents.llm import function_tool
-from livekit.plugins import openai, silero
-from src.meragi_inbound.prompt import get_prompt
+from livekit.plugins import openai, deepgram, google, elevenlabs, silero, noise_cancellation
+from livekit.plugins.turn_detector.multilingual import MultilingualModel
+# from meragi_inbound.prompt import get_meragi_inbound_prompt
+from meragi_inbound.constants import INSTRUCTIONS
 
 logger = logging.getLogger("meragi-inbound-agent")
 load_dotenv(".env.local")
@@ -47,16 +49,21 @@ class MeragiInboundAgent(Agent):
                  chat_ctx=None,
                  dial_info=dict[str, Any]):
         self.__name__ = "meragi-inbound-agent"
+        instructions = INSTRUCTIONS.replace("{{customer_name}}", customer_name)
         super().__init__(
-            instructions=get_prompt(customer_name=customer_name),
-            llm=openai.realtime.RealtimeModel(model="gpt-4o-mini-realtime-preview",voice="marina")
+            instructions=instructions,
+            stt=deepgram.STT(),
+            llm=google.LLM(model="gemini-2.5-flash-lite"),
+            tts=elevenlabs.TTS(voice_id="H8bdWZHK2OgZwTN7ponr"),
+            turn_detection=MultilingualModel(),
+            # llm=openai.realtime.RealtimeModel(model="gpt-4o-mini-realtime-preview",voice="marin")
         )
         self.dial_info = dial_info
         self.customer_name = customer_name
         self.participant: rtc.RemoteParticipant | None = None
 
     async def on_enter(self) -> None:
-        self.session.generate_reply(instructions=get_prompt(customer_name=self.customer_name))
+        self.session.generate_reply(instructions=INSTRUCTIONS.replace("{{customer_name}}", self.customer_name))
 
     @function_tool
     async def end_call(self, context: RunContext):
@@ -83,7 +90,7 @@ class MeragiInboundAgent(Agent):
 
         photo_multiplier = 0.6 if city == "Bangalore" else 0.8
         catering_multiplier = 0.005
-        decor_multiplier = 1.0
+        decor_multiplier = 0.75
 
         catering_budget = pax*catering_multiplier
         photo_budget = number_of_events*photo_multiplier
@@ -115,9 +122,9 @@ async def entrypoint(ctx: JobContext):
     # Helper to write event-specific JSON files in the room folder
     def write_event_json(data: dict, filename: str = None):
         if filename is None:
-            filename = os.path.join(f"session_events_{ctx.room.name}.jsonl")
+            filename = os.path.join(f"session_events_{ctx.room.name}.json")
         else:
-            filename = os.path.join(f"{filename}_{ctx.room.name}.jsonl")
+            filename = os.path.join(f"{filename}_{ctx.room.name}.json")
         with open(filename, "a") as f:  # "a" mode for append
             json.dump(data, f)
             f.write("\n")  # Add newline after each JSON object
@@ -131,7 +138,7 @@ async def entrypoint(ctx: JobContext):
         file_outputs=[
             api.EncodedFileOutput(
                 file_type=api.EncodedFileType.MP4,
-                filepath=f"{ctx.room.name}/call_recording_{ctx.room.name}.mp4",
+                filepath=f"meragi_inbound/{ctx.room.name}/call_recording_{ctx.room.name}.mp4",
                 s3=api.S3Upload(
                     access_key=os.getenv("AWS_ACCESS_KEY_ID"),
                     secret=os.getenv("AWS_SECRET_ACCESS_KEY"),
@@ -147,6 +154,8 @@ async def entrypoint(ctx: JobContext):
     # Set up a voice AI pipeline using OpenAI, Cartesia, Deepgram, and the LiveKit turn detector
     session = AgentSession(
         vad=ctx.proc.userdata["vad"],
+        false_interruption_timeout=1.0,  # Wait 1 second before resuming
+        resume_false_interruption=True,   # Enable auto-resume
         preemptive_generation=True,
     )
 
@@ -228,28 +237,36 @@ async def entrypoint(ctx: JobContext):
                 aws_secret_access_key=s3_secret_key,
             )
             
-            # Write final transcript and usage data to the single JSONL file
+            # Write final transcript and usage data to the single JSON file
             transcript_filename = write_event_json(session.history.to_dict(), "transcript")
             summary = usage_collector.get_summary()
             summary_filename = write_event_json(summary.__dict__, "summary")
             
-            # Upload the single JSONL file to the same S3 folder as egress
-            jsonl_filename = f"session_events_{ctx.room.name}.jsonl"
-            s3_key = f"{ctx.room.name}/{jsonl_filename}"
+            # Upload the single JSON file to the same S3 folder as egress
+            json_filename = f"session_events_{ctx.room.name}.json"
+            s3_key = f"meragi_inbound/{ctx.room.name}/{json_filename}"
             
-            if os.path.exists(jsonl_filename):
-                s3_client.upload_file(jsonl_filename, s3_bucket, s3_key)
-                s3_client.upload_file(transcript_filename, s3_bucket, f"{ctx.room.name}/{transcript_filename}")
-                s3_client.upload_file(summary_filename, s3_bucket, f"{ctx.room.name}/{summary_filename}")
+            if os.path.exists(json_filename):
+                s3_client.upload_file(json_filename, s3_bucket, s3_key)
+                s3_client.upload_file(transcript_filename, s3_bucket, f"meragi_inbound/{ctx.room.name}/{transcript_filename}")
+                s3_client.upload_file(summary_filename, s3_bucket, f"meragi_inbound/{ctx.room.name}/{summary_filename}")
                 logger.info(f"Uploaded events to s3://{s3_bucket}/{s3_key}")
                 
-                # Delete the local JSONL file after successful upload
-                os.remove(jsonl_filename)
+                # Delete the local JSON file after successful upload
+                os.remove(json_filename)
                 os.remove(transcript_filename)
                 os.remove(summary_filename)
-                logger.info(f"Deleted local file: {jsonl_filename}")
+                logger.info(f"Deleted local file: {json_filename}")
             else:
-                logger.warning(f"JSONL file {jsonl_filename} not found for upload")
+                logger.warning(f"JSON file {json_filename} not found for upload")
+
+            # data = {
+            #     "conversation_id": ctx.room.name,
+            #     "room_id": ctx.room.name,
+            # }
+
+            # async with aiohttp.ClientSession() as session:
+            #     async with session.post(f"https://qualif.revspot.ai/livekit/webhook_listener", json=data)
                 
         except Exception as e:
             logger.error(f"Failed to upload events to S3: {e}")
@@ -258,10 +275,10 @@ async def entrypoint(ctx: JobContext):
     ctx.add_shutdown_callback(write_room_events)
 
 
-    lkapi = api.LiveKitAPI()
-    res = await lkapi.egress.start_room_composite_egress(req)
+    # lkapi = api.LiveKitAPI()
+    # res = await lkapi.egress.start_room_composite_egress(req)
 
-    agent = LivspaceAgent(dial_info=dial_info)
+    agent = MeragiInboundAgent(customer_name=dial_info.get("customer_name","Subham"), dial_info=dial_info)
 
     # Start the session, which initializes the voice pipeline and warms up the models
     session_started = asyncio.create_task(
@@ -292,15 +309,15 @@ async def entrypoint(ctx: JobContext):
         logger.info(f"participant joined: {participant.identity}")
 
         agent.set_participant(participant)
-        await lkapi.aclose()
+        # await lkapi.aclose()
         
     except Exception as e:
         logger.error(f"Failed to create SIP participant: {e}")
         ctx.shutdown()
-        await lkapi.aclose()
+        # await lkapi.aclose()
         return
 
 
 if __name__ == "__main__":
-    cli.run_app(WorkerOptions(entrypoint_fnc=entrypoint, prewarm_fnc=prewarm, agent_name="livspace-agent"))
+    cli.run_app(WorkerOptions(entrypoint_fnc=entrypoint, prewarm_fnc=prewarm, agent_name="meragi-inbound-agent"))
     # cli.run_app(WorkerOptions(entrypoint_fnc=entrypoint, prewarm_fnc=prewarm))
