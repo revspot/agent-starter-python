@@ -4,8 +4,10 @@ import logging
 import os
 from typing import Any
 import asyncio
+import aiohttp
 
 import boto3
+import datetime
 from dotenv import load_dotenv
 import json
 from livekit.agents import (
@@ -37,7 +39,6 @@ from livekit import api, rtc
 from livekit.agents.llm import function_tool
 from livekit.plugins import openai, deepgram, google, elevenlabs, silero, noise_cancellation
 from livekit.plugins.turn_detector.multilingual import MultilingualModel
-# from meragi_inbound.prompt import get_meragi_inbound_prompt
 from meragi_inbound.constants import INSTRUCTIONS
 
 logger = logging.getLogger("meragi-inbound-agent")
@@ -56,7 +57,20 @@ class MeragiInboundAgent(Agent):
             llm=google.LLM(model="gemini-2.5-flash-lite"),
             tts=elevenlabs.TTS(voice_id="H8bdWZHK2OgZwTN7ponr"),
             turn_detection=MultilingualModel(),
-            # llm=openai.realtime.RealtimeModel(model="gpt-4o-mini-realtime-preview",voice="marin")
+            chat_ctx=chat_ctx,
+            # llm=openai.realtime.RealtimeModel(
+            #     model="gpt-4o-mini-realtime-preview",
+            #     voice="marin",
+            #     temperature=0.8,
+            #     turn_detection=openai.realtime.TurnDetection(
+            #             type="server_vad",
+            #             threshold=0.5,
+            #             prefix_padding_ms=300,
+            #             silence_duration_ms=500,
+            #             create_response=True,
+            #             interrupt_response=True,
+            #         )
+            #     )
         )
         self.dial_info = dial_info
         self.customer_name = customer_name
@@ -114,21 +128,32 @@ async def entrypoint(ctx: JobContext):
     }
     logger.info(f"connecting to room {ctx.room.name}")
     await ctx.connect()
-    logger.info(f"connected to room {ctx.room.name}")
+    room_id = await ctx.room.sid
+    logger.info(f"connected to room {ctx.room.name}, room_id: {room_id}")
 
     dial_info = json.loads(ctx.job.metadata)
-    participant_identity = phone_number = dial_info.get("phone_number")
+    bridge_id = dial_info.get("bridge_id")
+    participant_identity = dial_info.get("phone_number")
+    phone_number = dial_info.get("phone_number")
+    customer_name = dial_info.get("customer_name")
+    logger.info(f"Phone number: {phone_number}, Customer name: {customer_name}")
 
-    # Helper to write event-specific JSON files in the room folder
-    def write_event_json(data: dict, filename: str = None):
+    # Helper to write event-specific JSONL files (one JSON object per line)
+    def write_event_jsonl(data: dict, filename: str = None):
         if filename is None:
-            filename = os.path.join(f"session_events_{ctx.room.name}.json")
+            filename = os.path.join(f"session_events_{ctx.room.name}.jsonl")
         else:
-            filename = os.path.join(f"{filename}_{ctx.room.name}.json")
+            filename = os.path.join(f"{filename}_{ctx.room.name}.jsonl")
         with open(filename, "a") as f:  # "a" mode for append
             json.dump(data, f)
             f.write("\n")  # Add newline after each JSON object
+        return filename
 
+    # Helper to write single JSON files (complete JSON object)
+    def write_event_json(data: dict, filename: str):
+        filename = os.path.join(f"{filename}_{ctx.room.name}.json")
+        with open(filename, "w") as f:  # "w" mode to overwrite
+            json.dump(data, f, indent=2)  # Pretty print for readability
         return filename
 
     req = api.RoomCompositeEgressRequest(
@@ -159,6 +184,28 @@ async def entrypoint(ctx: JobContext):
         preemptive_generation=True,
     )
 
+    # @ctx.room.on("participant_connected")
+    # def on_participant_connected(participant: rtc.RemoteParticipant):
+    #     data = {
+    #         "identity": participant.identity,
+    #         "sid": participant.sid,
+    #         "metadata": participant.metadata,
+    #         "joined_at": datetime.datetime.now().isoformat(),
+    #         # "joined_at": participant.joined_at.isoformat() if participant.joined_at else None,
+    #     }
+    #     filename = write_event_json(data, filename = "room_events")
+    #     logging.info(f"Participant connected: {participant.identity}")
+
+    # @ctx.room.on("participant_disconnected")
+    # def on_participant_disconnected(participant: rtc.RemoteParticipant):
+    #     data = {
+    #         "identity": participant.identity,
+    #         "sid": participant.sid,
+    #         "metadata": participant.metadata,
+    #         "left_at": datetime.datetime.now().isoformat(),
+    #     }
+    #     filename = write_event_json(data, filename = "room_events")
+    #     logging.info(f"Participant disconnected: {participant.identity}")
 
 
     # sometimes background noise could interrupt the agent session, these are considered false positive interruptions
@@ -167,7 +214,7 @@ async def entrypoint(ctx: JobContext):
     def _on_agent_false_interruption(ev: AgentFalseInterruptionEvent):
         logger.info("false positive interruption, resuming")
         session.generate_reply(instructions=ev.extra_instructions or NOT_GIVEN)
-        filename = write_event_json(ev.model_dump())
+        filename = write_event_jsonl(ev.model_dump())
         logger.info(f"Agent false interruption: {filename}")
 
     # Metrics collection, to measure pipeline performance
@@ -178,47 +225,47 @@ async def entrypoint(ctx: JobContext):
     def _on_metrics_collected(ev: MetricsCollectedEvent):
         metrics.log_metrics(ev.metrics)
         usage_collector.collect(ev.metrics)
-        filename = write_event_json(ev.model_dump())
+        filename = write_event_jsonl(ev.model_dump())
         logger.info(f"Metrics collected: {filename}")
 
     @session.on("speech_created")
     def _on_speech_created(ev: SpeechCreatedEvent):
-        filename = write_event_json(ev.model_dump())
+        filename = write_event_jsonl(ev.model_dump())
         logger.info(f"Speech created: {filename}")
 
     @session.on("user_state_changed")
     def _on_user_state_changed(ev: UserStateChangedEvent):
-        filename = write_event_json(ev.model_dump())
+        filename = write_event_jsonl(ev.model_dump())
         logger.info(f"User state changed: {filename}")
 
     @session.on("user_input_transcribed")
     def _on_user_input_transcribed(ev: UserInputTranscribedEvent):
-        filename = write_event_json(ev.model_dump())
+        filename = write_event_jsonl(ev.model_dump())
         logger.info(f"User input transcribed: {filename}")
 
     @session.on("conversation_item_added")
     def _on_conversation_item_added(ev: ConversationItemAddedEvent):
-        filename = write_event_json(ev.model_dump())
+        filename = write_event_jsonl(ev.model_dump())
         logger.info(f"Conversation item added: {filename}")
 
     @session.on("function_tools_executed")
     def _on_function_tools_executed(ev: FunctionToolsExecutedEvent):
-        filename = write_event_json(ev.model_dump())
+        filename = write_event_jsonl(ev.model_dump())
         logger.info(f"Function tools executed: {filename}")
 
     @session.on("agent_state_changed")
     def _on_agent_state_changed(ev: AgentStateChangedEvent):
-        filename = write_event_json(ev.model_dump())
+        filename = write_event_jsonl(ev.model_dump())
         logger.info(f"Agent state changed: {filename}")
     
     @session.on("error")
     def _on_error(ev: ErrorEvent):
-        filename = write_event_json(ev.model_dump())
+        filename = write_event_jsonl(ev.model_dump())
         logger.info(f"Error: {filename}")
     
     @session.on("close")
     def _on_close(ev: CloseEvent):
-        filename = write_event_json(ev.model_dump())
+        filename = write_event_jsonl(ev.model_dump())
         logger.info(f"Close: {filename}")
     
 
@@ -242,34 +289,60 @@ async def entrypoint(ctx: JobContext):
             summary = usage_collector.get_summary()
             summary_filename = write_event_json(summary.__dict__, "summary")
             
-            # Upload the single JSON file to the same S3 folder as egress
-            json_filename = f"session_events_{ctx.room.name}.json"
-            s3_key = f"meragi_inbound/{ctx.room.name}/{json_filename}"
+            # Upload the single JSONL file to the same S3 folder as egress
+            jsonl_filename = f"session_events_{ctx.room.name}.jsonl"
+            s3_key = f"meragi_inbound/{ctx.room.name}/{jsonl_filename}"
+
+            # with open(f'room_events_{ctx.room.name}.json', 'r') as file:
+            #     remote_participant_data = json.load(file)
+            #     call_started_ts = remote_participant_data.get("joined_at")
+            #     s3_client.upload_file(f'room_events_{ctx.room.name}.json', s3_bucket, f"meragi_inbound/{ctx.room.name}/room_events_{ctx.room.name}.json")
+            #     os.remove(f'room_events_{ctx.room.name}.json')
             
-            if os.path.exists(json_filename):
-                s3_client.upload_file(json_filename, s3_bucket, s3_key)
+            if os.path.exists(jsonl_filename):
+                s3_client.upload_file(jsonl_filename, s3_bucket, s3_key)
                 s3_client.upload_file(transcript_filename, s3_bucket, f"meragi_inbound/{ctx.room.name}/{transcript_filename}")
                 s3_client.upload_file(summary_filename, s3_bucket, f"meragi_inbound/{ctx.room.name}/{summary_filename}")
                 logger.info(f"Uploaded events to s3://{s3_bucket}/{s3_key}")
                 
-                # Delete the local JSON file after successful upload
-                os.remove(json_filename)
+                # Delete the local JSONL file after successful upload
+                os.remove(jsonl_filename)
                 os.remove(transcript_filename)
                 os.remove(summary_filename)
-                logger.info(f"Deleted local file: {json_filename}")
+                logger.info(f"Deleted local file: {jsonl_filename}")
             else:
-                logger.warning(f"JSON file {json_filename} not found for upload")
-
-            # data = {
-            #     "conversation_id": ctx.room.name,
-            #     "room_id": ctx.room.name,
-            # }
-
-            # async with aiohttp.ClientSession() as session:
-            #     async with session.post(f"https://qualif.revspot.ai/livekit/webhook_listener", json=data)
-                
+                logger.warning(f"JSONL file {jsonl_filename} not found for upload")
         except Exception as e:
             logger.error(f"Failed to upload events to S3: {e}")
+
+            
+        try:
+            data = {
+                "conversation_id": ctx.room.name,
+                "status": "completed",
+                "room_id": room_id,
+                # "call_started_ts": call_started_ts,
+                "recording_url": f"https://{os.getenv('S3_RECORDING_BUCKET')}.s3.{os.getenv('S3_RECORDING_REGION')}.amazonaws.com/meragi_inbound/{ctx.room.name}/call_recording_{ctx.room.name}.mp4",
+                "transcript": session.history.to_dict(),
+                "summary": summary.__dict__
+            }
+
+            # url = f"https://qualif.revspot.ai/livekit/webhook_listener/{bridge_id}"
+            url = f"http://localhost:8001/livekit/webhook_listener/{bridge_id}"
+            logger.info(f"Sending webhook to {url}")
+            async with aiohttp.ClientSession() as http_session:
+                async with http_session.post(url, json=data) as response:
+                    if response.status == 200 or response.status == 201:
+                        logger.info(f"Webhook sent successfully to {url}, Response: {response.status}")
+                    else:
+                        logger.error(f"Failed to send webhook: {response.status}")
+                        error_message = await response.text()
+                        logger.error(f"Error message: {error_message}")
+                        raise Exception(f"Webhook failed with status {response.status}: {error_message}")
+
+                
+        except Exception as e:
+            logger.error(f"Failed to send webhook: {e}")
 
 
     ctx.add_shutdown_callback(write_room_events)
@@ -278,7 +351,7 @@ async def entrypoint(ctx: JobContext):
     # lkapi = api.LiveKitAPI()
     # res = await lkapi.egress.start_room_composite_egress(req)
 
-    agent = MeragiInboundAgent(customer_name=dial_info.get("customer_name","Subham"), dial_info=dial_info)
+    agent = MeragiInboundAgent(customer_name=customer_name, dial_info=dial_info)
 
     # Start the session, which initializes the voice pipeline and warms up the models
     session_started = asyncio.create_task(
