@@ -80,10 +80,85 @@ class MeragiInboundAgent(Agent):
         self.session.generate_reply(instructions=INSTRUCTIONS.replace("{{customer_name}}", self.customer_name))
 
     @function_tool
-    async def end_call(self, context: RunContext):
-        """When you decide to end the call after the end of conversation, use this tool."""
+    async def voice_mail_detection(self, context: RunContext):
+        """Detect when a call has been answered by a voicemail system rather than a human.
+            Call this function when you detect that the call recipient is not available and the call has been answered by an automated voicemail system.
 
-        logger.info("Ending call")
+            Common indicators of voicemail:
+            - Automated greeting messages: "You have reached the voicemail of..."
+            - Recording instructions: "Please leave a message after the beep/tone"
+            - Voicemail system prompts: "Please leave your name and number"
+            - Generic unavailable messages: "The number you have dialed is not available"
+
+            Before calling this function:
+            - Provide a specific reason referencing the actual voicemail content heard
+
+            After calling this function:
+            - If a voicemail message is configured, it will be played automatically
+            - The call will end immediately after the message (or immediately if no message)
+            - No further conversation will take place
+
+            You must provide a specific reason for detecting voicemail that references the exact wording that indicated voicemail.
+
+            EXAMPLE FLOWS:
+
+            Example 1 (clear voicemail greeting):
+            System plays: "Hi, you've reached Sarah. I'm not available right now. Please leave a message after the beep."
+            Assistant: [voicemail_detection function called with reason="automated greeting detected: 'Hi, you've reached Sarah. I'm not available right now. Please leave a message after the beep.'"]
+
+            Example 2 (generic voicemail):
+            System plays: "The number you have dialed is not available. At the tone, please leave a message."
+            Assistant: [voicemail_detection function called with reason="voicemail instruction detected: 'The number you have dialed is not available. At the tone, please leave a message.'"]
+
+            Example 3 (DO NOT call - human response):
+            Human: "Hello? Who is this?"
+            Assistant: [follows system prompt and conversation objectives rather than calling voicemail_detection]
+
+            You must provide a specific reason for detecting voicemail. Never call this tool without a valid reason.
+            The reason must include a specific reference to the wording in the user message that indicates voicemail."""
+
+        logger.info(f"voice mail detection function called")
+        try:
+            job_ctx = get_job_context()
+            if job_ctx is not None:
+                await job_ctx.api.room.delete_room(api.DeleteRoomRequest(room=job_ctx.room.name))
+        except Exception as e:
+            logger.error(f"Error during call cleanup: {str(e)}")
+
+    @function_tool
+    async def end_call(self, context: RunContext):
+        """Gracefully conclude conversations when appropriate
+            Call this function when:
+            1. EXPLICIT ENDINGS
+            - User says goodbye variants: "bye," "see you," "that's all," etc.
+            - User directly declines help: "no thanks," "I'm good," etc.
+            - User indicates completion: "that's what I needed," "all set," etc.
+
+            2. IMPLICIT ENDINGS
+            - User gives minimal/disengaged responses after their needs are met
+            - User expresses intention to leave: "I need to go," "getting late," etc.
+            - Natural conversation conclusion after all queries are resolved
+
+            Before calling this function:
+            1. Confirm all user queries are fully addressed
+            2. Provide a contextually appropriate closing response:
+            - For task completion: "Glad I could help with [specific task]! Have a great day!"
+            - For general endings: "Thanks for chatting! Take care!"
+            - For business contexts: "Thank you for your business! Don't hesitate to reach out again."
+
+            DO NOT:
+            - Call this function during active problem-solving
+            - End conversation when user expresses new concerns
+            - Use generic closings without acknowledging the specific interaction
+            - Continue conversation after user has clearly indicated ending
+            - Add "Let me know if you need anything else" after user says goodbye
+
+            Example Flow:
+            User: "That's all I needed, thanks!"
+            Assistant: "Happy I could help with your password reset! Have a wonderful day!"
+            [end_call function called]"""
+
+        logger.info("end_call function called")
         await context.session.generate_reply(instructions="Thank you for calling. Goodbye!")
         current_speech = context.session.current_speech
         if current_speech is not None:
@@ -120,7 +195,22 @@ class MeragiInboundAgent(Agent):
 def prewarm(proc: JobProcess):
     proc.userdata["vad"] = silero.VAD.load()
 
+async def send_webhook_to_qualif(data: dict, url: str):
+    """Send webhook to Qualif"""
+    logger.info(f"Sending webhook to {url}")
+    async with aiohttp.ClientSession() as http_session:
+        async with http_session.post(url, json=data) as response:
+            if response.status == 200 or response.status == 201:
+                logger.info(f"Webhook sent successfully to {url}, Response: {response.status}")
+            else:
+                logger.error(f"Failed to send webhook: {response.status}")
+                error_message = await response.text()
+                logger.error(f"Error message: {error_message}")
+                raise Exception(f"Webhook failed with status {response.status}: {error_message}")
+
+
 async def entrypoint(ctx: JobContext):
+    """Entrypoint for the agent"""
     # Logging setup
     # Add any other context you want in all log entries here
     ctx.log_context_fields = {
@@ -140,6 +230,7 @@ async def entrypoint(ctx: JobContext):
 
     # Helper to write event-specific JSONL files (one JSON object per line)
     def write_event_jsonl(data: dict, filename: str = None):
+        """Write event to JSONL file"""
         if filename is None:
             filename = os.path.join(f"session_events_{ctx.room.name}.jsonl")
         else:
@@ -151,6 +242,7 @@ async def entrypoint(ctx: JobContext):
 
     # Helper to write single JSON files (complete JSON object)
     def write_event_json(data: dict, filename: str):
+        """Write event to JSON file"""
         filename = os.path.join(f"{filename}_{ctx.room.name}.json")
         with open(filename, "w") as f:  # "w" mode to overwrite
             json.dump(data, f, indent=2)  # Pretty print for readability
@@ -251,6 +343,11 @@ async def entrypoint(ctx: JobContext):
     @session.on("function_tools_executed")
     def _on_function_tools_executed(ev: FunctionToolsExecutedEvent):
         filename = write_event_jsonl(ev.model_dump())
+        data = ev.model_dump()
+        data["event"] = "function_tools_executed"
+        data["room"] = {"sid": room_id}
+        url = f"http://localhost:8001/livekit/events"
+        asyncio.create_task(send_webhook_to_qualif(data, url))
         logger.info(f"Function tools executed: {filename}")
 
     @session.on("agent_state_changed")
@@ -330,16 +427,8 @@ async def entrypoint(ctx: JobContext):
             # url = f"https://qualif.revspot.ai/livekit/webhook_listener/{bridge_id}"
             url = f"http://localhost:8001/livekit/webhook_listener/{bridge_id}"
             logger.info(f"Sending webhook to {url}")
-            async with aiohttp.ClientSession() as http_session:
-                async with http_session.post(url, json=data) as response:
-                    if response.status == 200 or response.status == 201:
-                        logger.info(f"Webhook sent successfully to {url}, Response: {response.status}")
-                    else:
-                        logger.error(f"Failed to send webhook: {response.status}")
-                        error_message = await response.text()
-                        logger.error(f"Error message: {error_message}")
-                        raise Exception(f"Webhook failed with status {response.status}: {error_message}")
-
+            
+            await send_webhook_to_qualif(data, url)
                 
         except Exception as e:
             logger.error(f"Failed to send webhook: {e}")
@@ -348,8 +437,8 @@ async def entrypoint(ctx: JobContext):
     ctx.add_shutdown_callback(write_room_events)
 
 
-    # lkapi = api.LiveKitAPI()
-    # res = await lkapi.egress.start_room_composite_egress(req)
+    lkapi = api.LiveKitAPI()
+    res = await lkapi.egress.start_room_composite_egress(req)
 
     agent = MeragiInboundAgent(customer_name=customer_name, dial_info=dial_info)
 
@@ -382,12 +471,12 @@ async def entrypoint(ctx: JobContext):
         logger.info(f"participant joined: {participant.identity}")
 
         agent.set_participant(participant)
-        # await lkapi.aclose()
+        await lkapi.aclose()
         
     except Exception as e:
         logger.error(f"Failed to create SIP participant: {e}")
         ctx.shutdown()
-        # await lkapi.aclose()
+        await lkapi.aclose()
         return
 
 
