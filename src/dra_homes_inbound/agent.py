@@ -5,6 +5,7 @@ import os
 from typing import Any
 import asyncio
 import aiohttp
+import re
 
 import boto3
 import datetime
@@ -39,45 +40,114 @@ from livekit import api, rtc
 from livekit.agents.llm import function_tool
 from livekit.plugins import openai, deepgram, google, elevenlabs, silero, noise_cancellation
 from livekit.plugins.turn_detector.multilingual import MultilingualModel
-from meragi_inbound.constants import INSTRUCTIONS
+from dra_homes_inbound.constants import INSTRUCTIONS
 
-logger = logging.getLogger("meragi-inbound-agent")
+logger = logging.getLogger("dra-homes-inbound-agent")
 load_dotenv(".env.local")
 
-class MeragiInboundAgent(Agent):
+def extract_sip_status_from_error(error: Exception) -> dict:
+    """
+    Extract SIP status information from TwirpError or other SIP-related exceptions.
+    
+    Returns a dictionary with SIP status details:
+    - sip_status_code: The numeric SIP status code (e.g., 486, 503)
+    - sip_status_message: The human-readable status message (e.g., "User Busy")
+    - error_type: The type of error (e.g., "TwirpError")
+    - raw_error: The original error message
+    """
+    sip_info = {
+        "sip_status_code": None,
+        "sip_status_message": None,
+        "error_type": type(error).__name__,
+        "raw_error": str(error)
+    }
+    
+    error_str = str(error)
+    
+    # Check if it's a TwirpError with SIP status information
+    if "TwirpError" in error_str and "sip status" in error_str.lower():
+        # Extract SIP status code using regex
+        sip_code_match = re.search(r'sip status:\s*(\d+)', error_str)
+        if sip_code_match:
+            sip_info["sip_status_code"] = int(sip_code_match.group(1))
+        
+        # Extract SIP status message
+        sip_message_match = re.search(r'sip status:\s*\d+:\s*([^,]+)', error_str)
+        if sip_message_match:
+            sip_info["sip_status_message"] = sip_message_match.group(1).strip()
+    
+    # Check for metadata with SIP information
+    if hasattr(error, 'metadata') and error.metadata:
+        metadata = error.metadata
+        if 'sip_status' in metadata:
+            sip_info["sip_status_message"] = metadata['sip_status']
+        if 'sip_status_code' in metadata:
+            sip_info["sip_status_code"] = int(metadata['sip_status_code'])
+    
+    return sip_info
+
+def identify_call_status(error: Exception) -> str:
+    """
+    Simple function to identify if a SIP call failed due to no-answer or busy status.
+    
+    Args:
+        error: The exception that occurred during SIP participant creation
+        
+    Returns:
+        str: One of the following:
+        - "busy" - User is busy (486, 600)
+        - "no_answer" - No answer (408, 480, 504, 603, 604)
+        - "other" - Other error types
+        - "unknown" - Could not determine status
+    """
+    sip_info = extract_sip_status_from_error(error)
+    status_code = sip_info.get('sip_status_code')
+    
+    if not status_code:
+        return "unknown"
+    
+    # Busy status codes
+    if status_code in [486, 600]:
+        return "busy"
+    
+    # No answer status codes
+    if status_code in [408, 480, 504, 603, 604]:
+        return "no_answer"
+    
+    # All other status codes
+    return "other"
+
+class DraHomesInboundAgent(Agent):
     def __init__(self,
                  customer_name: str,
+                 lead_honorific: str,
+                 greeting_time: str,
+                 salutation: str,
                  chat_ctx=None,
                  dial_info=dict[str, Any]):
-        self.__name__ = "meragi-inbound-agent"
-        instructions = INSTRUCTIONS.replace("{{customer_name}}", customer_name)
+        self.__name__ = "livekit_dra_homes_inbound"
+        instructions = INSTRUCTIONS.replace("{{lead_honorific}}", lead_honorific)
         super().__init__(
             instructions=instructions,
-            stt=deepgram.STT(),
+            stt=elevenlabs.STT(),
             llm=google.LLM(model="gemini-2.5-flash-lite"),
-            tts=elevenlabs.TTS(voice_id="H8bdWZHK2OgZwTN7ponr"),
+            tts=elevenlabs.TTS(
+                model="eleven_flash_v2_5", 
+                voice_id="90ipbRoKi4CpHXvKVtl0",
+                streaming_latency=4
+                ),
             turn_detection=MultilingualModel(),
             chat_ctx=chat_ctx,
-            # llm=openai.realtime.RealtimeModel(
-            #     model="gpt-4o-mini-realtime-preview",
-            #     voice="marin",
-            #     temperature=0.8,
-            #     turn_detection=openai.realtime.TurnDetection(
-            #             type="server_vad",
-            #             threshold=0.5,
-            #             prefix_padding_ms=300,
-            #             silence_duration_ms=500,
-            #             create_response=True,
-            #             interrupt_response=True,
-            #         )
-            #     )
         )
         self.dial_info = dial_info
         self.customer_name = customer_name
+        self.lead_honorific = lead_honorific
+        self.greeting_time = greeting_time
+        self.salutation = salutation
         self.participant: rtc.RemoteParticipant | None = None
 
     async def on_enter(self) -> None:
-        self.session.generate_reply(instructions=INSTRUCTIONS.replace("{{customer_name}}", self.customer_name))
+        await self.session.generate_reply(instructions=f"""Good {self.greeting_time}, am I speaking with {self.salutation} {self.customer_name}?""")
 
     @function_tool
     async def voice_mail_detection(self, context: RunContext):
@@ -118,12 +188,14 @@ class MeragiInboundAgent(Agent):
             The reason must include a specific reference to the wording in the user message that indicates voicemail."""
 
         logger.info(f"voice mail detection function called")
-        try:
-            job_ctx = get_job_context()
-            if job_ctx is not None:
-                await job_ctx.api.room.delete_room(api.DeleteRoomRequest(room=job_ctx.room.name))
-        except Exception as e:
-            logger.error(f"Error during call cleanup: {str(e)}")
+
+        self._closing_task = asyncio.create_task(self.session.aclose())
+        # try:
+        #     job_ctx = get_job_context()
+        #     if job_ctx is not None:
+        #         await job_ctx.api.room.delete_room(api.DeleteRoomRequest(room=job_ctx.room.name))
+        # except Exception as e:
+        #     logger.error(f"Error during call cleanup: {str(e)}")
 
     @function_tool
     async def end_call(self, context: RunContext):
@@ -147,6 +219,7 @@ class MeragiInboundAgent(Agent):
             - For business contexts: "Thank you for your business! Don't hesitate to reach out again."
 
             DO NOT:
+            - Call this function when you have asked a question and waiting for an answer from the user
             - Call this function during active problem-solving
             - End conversation when user expresses new concerns
             - Use generic closings without acknowledging the specific interaction
@@ -159,37 +232,18 @@ class MeragiInboundAgent(Agent):
             [end_call function called]"""
 
         logger.info("end_call function called")
-        await context.session.generate_reply(instructions="Thank you for calling. Goodbye!")
+        await context.session.generate_reply(instructions="Thank you for calling. Goodbye!", allow_interruptions=True)
         current_speech = context.session.current_speech
         if current_speech is not None:
             await current_speech.wait_for_playout()
 
         self._closing_task = asyncio.create_task(self.session.aclose())
-            
         # try:
         #     job_ctx = get_job_context()
         #     if job_ctx is not None:
         #         await job_ctx.api.room.delete_room(api.DeleteRoomRequest(room=job_ctx.room.name))
         # except Exception as e:
         #     logger.error(f"Error during call cleanup: {str(e)}")
-
-    @function_tool
-    async def budget_calculator(self, context: RunContext, city: str, number_of_events: int, pax: int):
-        """Use this tool to calculate the budget for the wedding.
-        You will need to capture the city, number of events, and pax to calculate the budget."""
-        logger.info(f"Calculating budget for {city}, {number_of_events}, {pax}")
-
-        photo_multiplier = 0.6 if city == "Bangalore" else 0.8
-        catering_multiplier = 0.005
-        decor_multiplier = 0.75
-
-        catering_budget = pax*catering_multiplier
-        photo_budget = number_of_events*photo_multiplier
-        decor_budget = number_of_events*decor_multiplier
-        
-        total_budget = catering_budget + photo_budget + decor_budget
-
-        return f"Decor Budget: {decor_budget:.2f} Lakhs, Photo Budget: {photo_budget:.2f} Lakhs, Catering Budget: {catering_budget:.2f} Lakhs, Total Budget: {total_budget:.2f} Lakhs"
 
     def set_participant(self, participant: rtc.RemoteParticipant):
         self.participant = participant
@@ -225,10 +279,17 @@ async def entrypoint(ctx: JobContext):
 
     dial_info = json.loads(ctx.job.metadata)
     bridge_id = dial_info.get("bridge_id")
+    trunk_id = dial_info.get("trunk_id")
     participant_identity = dial_info.get("phone_number")
     phone_number = dial_info.get("phone_number")
-    customer_name = dial_info.get("customer_name")
-    logger.info(f"Phone number: {phone_number}, Customer name: {customer_name}")
+    logger.info(f"sip_trunk_id : {trunk_id}")
+    # dynamic_vars = dial_info.get("dynamic_vars")
+    # customer_name = dial_info.get("customer_name")
+    customer_name = dial_info.get("dynamic_vars", {}).get("customer_name")
+    lead_honorific = dial_info.get("dynamic_vars", {}).get("lead_honorific")
+    greeting_time = dial_info.get("dynamic_vars", {}).get("greeting_time")
+    salutation = dial_info.get("dynamic_vars", {}).get("salutation")
+    logger.info(f"Phone number: {phone_number}, Customer name: {customer_name}, Lead honorific: {lead_honorific}, Greeting time: {greeting_time}, Salutation: {salutation}")
 
     # Helper to write event-specific JSONL files (one JSON object per line)
     def write_event_jsonl(data: dict, filename: str = None):
@@ -257,7 +318,7 @@ async def entrypoint(ctx: JobContext):
         file_outputs=[
             api.EncodedFileOutput(
                 file_type=api.EncodedFileType.MP4,
-                filepath=f"meragi_inbound/{ctx.room.name}/call_recording_{ctx.room.name}.mp4",
+                filepath=f"dra_homes_inbound/{ctx.room.name}/call_recording_{ctx.room.name}.mp4",
                 s3=api.S3Upload(
                     access_key=os.getenv("AWS_ACCESS_KEY_ID"),
                     secret=os.getenv("AWS_SECRET_ACCESS_KEY"),
@@ -276,38 +337,17 @@ async def entrypoint(ctx: JobContext):
         false_interruption_timeout=1.0,  # Wait 1 second before resuming
         resume_false_interruption=True,   # Enable auto-resume
         preemptive_generation=True,
+        # allow_interruptions=True,
+        # min_interruption_duration=0.5,
+        # min_interruption_words=2
     )
-
-    # @ctx.room.on("participant_connected")
-    # def on_participant_connected(participant: rtc.RemoteParticipant):
-    #     data = {
-    #         "identity": participant.identity,
-    #         "sid": participant.sid,
-    #         "metadata": participant.metadata,
-    #         "joined_at": datetime.datetime.now().isoformat(),
-    #         # "joined_at": participant.joined_at.isoformat() if participant.joined_at else None,
-    #     }
-    #     filename = write_event_json(data, filename = "room_events")
-    #     logging.info(f"Participant connected: {participant.identity}")
-
-    # @ctx.room.on("participant_disconnected")
-    # def on_participant_disconnected(participant: rtc.RemoteParticipant):
-    #     data = {
-    #         "identity": participant.identity,
-    #         "sid": participant.sid,
-    #         "metadata": participant.metadata,
-    #         "left_at": datetime.datetime.now().isoformat(),
-    #     }
-    #     filename = write_event_json(data, filename = "room_events")
-    #     logging.info(f"Participant disconnected: {participant.identity}")
-
 
     # sometimes background noise could interrupt the agent session, these are considered false positive interruptions
     # when it's detected, you may resume the agent's speech
     @session.on("agent_false_interruption")
     def _on_agent_false_interruption(ev: AgentFalseInterruptionEvent):
         logger.info("false positive interruption, resuming")
-        session.generate_reply(instructions=ev.extra_instructions or NOT_GIVEN)
+        session.generate_reply(instructions=ev.extra_instructions or NOT_GIVEN, allow_interruptions=True)
         filename = write_event_jsonl(ev.model_dump())
         logger.info(f"Agent false interruption: {filename}")
 
@@ -348,7 +388,7 @@ async def entrypoint(ctx: JobContext):
         data = ev.model_dump()
         data["event"] = "function_tools_executed"
         data["room"] = {"sid": room_id}
-        url = f"http://localhost:8001/livekit/events"
+        url = f"https://qualif.revspot.ai/livekit/events"
         asyncio.create_task(send_webhook_to_qualif(data, url))
         logger.info(f"Function tools executed: {filename}")
 
@@ -369,9 +409,9 @@ async def entrypoint(ctx: JobContext):
         data = ev.model_dump()
         data["event"] = "session_closed"
         data["room"] = {"sid": room_id}
-        url = f"http://localhost:8001/livekit/events"
+        url = f"https://qualif.revspot.ai/livekit/events"
         asyncio.create_task(send_webhook_to_qualif(data, url))
-        ctx.delete_room()
+        asyncio.create_task(ctx.delete_room())
         # await job_ctx.api.room.delete_room(api.DeleteRoomRequest(room=job_ctx.room.name))
     
 
@@ -397,18 +437,18 @@ async def entrypoint(ctx: JobContext):
             
             # Upload the single JSONL file to the same S3 folder as egress
             jsonl_filename = f"session_events_{ctx.room.name}.jsonl"
-            s3_key = f"meragi_inbound/{ctx.room.name}/{jsonl_filename}"
+            s3_key = f"dra_homes_inbound/{ctx.room.name}/{jsonl_filename}"
 
             # with open(f'room_events_{ctx.room.name}.json', 'r') as file:
             #     remote_participant_data = json.load(file)
             #     call_started_ts = remote_participant_data.get("joined_at")
-            #     s3_client.upload_file(f'room_events_{ctx.room.name}.json', s3_bucket, f"meragi_inbound/{ctx.room.name}/room_events_{ctx.room.name}.json")
+            #     s3_client.upload_file(f'room_events_{ctx.room.name}.json', s3_bucket, f"dra_homes_inbound/{ctx.room.name}/room_events_{ctx.room.name}.json")
             #     os.remove(f'room_events_{ctx.room.name}.json')
             
             if os.path.exists(jsonl_filename):
                 s3_client.upload_file(jsonl_filename, s3_bucket, s3_key)
-                s3_client.upload_file(transcript_filename, s3_bucket, f"meragi_inbound/{ctx.room.name}/{transcript_filename}")
-                s3_client.upload_file(summary_filename, s3_bucket, f"meragi_inbound/{ctx.room.name}/{summary_filename}")
+                s3_client.upload_file(transcript_filename, s3_bucket, f"dra_homes_inbound/{ctx.room.name}/{transcript_filename}")
+                s3_client.upload_file(summary_filename, s3_bucket, f"dra_homes_inbound/{ctx.room.name}/{summary_filename}")
                 logger.info(f"Uploaded events to s3://{s3_bucket}/{s3_key}")
                 
                 # Delete the local JSONL file after successful upload
@@ -428,13 +468,12 @@ async def entrypoint(ctx: JobContext):
                 "status": "completed",
                 "room_id": room_id,
                 # "call_started_ts": call_started_ts,
-                "recording_url": f"https://{os.getenv('S3_RECORDING_BUCKET')}.s3.{os.getenv('S3_RECORDING_REGION')}.amazonaws.com/meragi_inbound/{ctx.room.name}/call_recording_{ctx.room.name}.mp4",
+                "recording_url": f"https://{os.getenv('S3_RECORDING_BUCKET')}.s3.{os.getenv('S3_RECORDING_REGION')}.amazonaws.com/dra_homes_inbound/{ctx.room.name}/call_recording_{ctx.room.name}.mp4",
                 "transcript": session.history.to_dict(),
                 "summary": summary.__dict__
             }
 
-            # url = f"https://qualif.revspot.ai/livekit/webhook_listener/{bridge_id}"
-            url = f"http://localhost:8001/livekit/webhook_listener/{bridge_id}"
+            url = f"https://qualif.revspot.ai/livekit/webhook_listener/{bridge_id}"
             logger.info(f"Sending webhook to {url}")
             
             await send_webhook_to_qualif(data, url)
@@ -449,7 +488,7 @@ async def entrypoint(ctx: JobContext):
     lkapi = api.LiveKitAPI()
     res = await lkapi.egress.start_room_composite_egress(req)
 
-    agent = MeragiInboundAgent(customer_name=customer_name, dial_info=dial_info)
+    agent = DraHomesInboundAgent(customer_name=customer_name, lead_honorific=lead_honorific, greeting_time=greeting_time, salutation=salutation, dial_info=dial_info)
 
     # Start the session, which initializes the voice pipeline and warms up the models
     session_started = asyncio.create_task(
@@ -468,7 +507,8 @@ async def entrypoint(ctx: JobContext):
         await ctx.api.sip.create_sip_participant(
             api.CreateSIPParticipantRequest(
                 room_name=ctx.room.name,
-                sip_trunk_id=os.getenv("SIP_OUTBOUND_TRUNK_ID"),
+                # sip_trunk_id=os.getenv("SIP_OUTBOUND_TRUNK_ID"),
+                sip_trunk_id=trunk_id,
                 sip_call_to=phone_number,
                 participant_identity=participant_identity,
                 wait_until_answered=True,
@@ -483,13 +523,56 @@ async def entrypoint(ctx: JobContext):
         await lkapi.aclose()
         
     except Exception as e:
+        # Identify the call status (busy, no_answer, other, unknown)
+        call_status = identify_call_status(e)
+        
+        # # Extract SIP status information for detailed logging
+        # sip_info = extract_sip_status_from_error(e)
+        
+        # Log the call status and SIP details
         logger.error(f"Failed to create SIP participant: {e}")
+        logger.error(f"Call Status: {call_status}")
 
+        url = f"https://qualif.revspot.ai/livekit/webhook_listener/{bridge_id}"
+        logger.info(f"Sending webhook to {url}")
+
+        status_mapping = {
+            "in-progress": "processing",
+            "completed": "ended",
+            "failed": "dial_failed",
+            "cancelled": "dial_failed",
+            "busy": "dial_busy",
+            "no-answer": "dial_no_answer",
+            "ringing": "processing",
+            "initiated": "processing",
+            "error": "error",
+        }
+        data = {
+            "event": "failed_to_create_sip_participant",
+            "conversation_id": ctx.room.name,
+            "status": status_mapping.get(call_status, "error"),
+            "room_id": room_id,
+            "call_status": call_status,
+            "error": str(e),
+        }
+        await send_webhook_to_qualif(data, url)
+
+        # logger.error(f"SIP Status Code: {sip_info.get('sip_status_code', 'Unknown')}")
+        # logger.error(f"SIP Status Message: {sip_info.get('sip_status_message', 'Unknown')}")
+        
+        # You can now use call_status to decide your action:
+        # - "busy": User is busy, you might want to retry later
+        # - "no_answer": No answer, you might want to retry or mark as no answer
+        # - "other": Other error, check logs for details
+        # - "unknown": Could not determine, check raw error
+        
+        # logger.error(f"Raw error details: {sip_info.get('raw_error', str(e))}")
+        
         ctx.shutdown()
         await lkapi.aclose()
         return
 
 
 if __name__ == "__main__":
-    cli.run_app(WorkerOptions(entrypoint_fnc=entrypoint, prewarm_fnc=prewarm, agent_name="meragi-inbound-agent"))
+    cli.run_app(WorkerOptions(entrypoint_fnc=entrypoint, prewarm_fnc=prewarm, agent_name="livekit_dra_homes_inbound"))
     # cli.run_app(WorkerOptions(entrypoint_fnc=entrypoint, prewarm_fnc=prewarm))
