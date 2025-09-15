@@ -40,9 +40,9 @@ from livekit import api, rtc
 from livekit.agents.llm import function_tool
 from livekit.plugins import openai, deepgram, google, elevenlabs, silero, noise_cancellation
 from livekit.plugins.turn_detector.multilingual import MultilingualModel
-from dra_homes_inbound.constants import INSTRUCTIONS
+from livspace.constants import INSTRUCTIONS
 
-logger = logging.getLogger("dra-homes-inbound-agent")
+logger = logging.getLogger("livspace-inbound-agent")
 load_dotenv(".env.local")
 
 def extract_sip_status_from_error(error: Exception) -> dict:
@@ -117,27 +117,27 @@ def identify_call_status(error: Exception) -> str:
     # All other status codes
     return "other"
 
-class DraHomesInboundAgent(Agent):
+class LivspaceInboundAgent(Agent):
     def __init__(self,
-                 customer_name: str,
-                 lead_honorific: str,
-                 greeting_time: str,
-                 salutation: str,
+                #  customer_name: str,
+                #  lead_honorific: str,
+                #  greeting_time: str,
+                #  salutation: str,
                  chat_ctx=None,
                  dial_info=dict[str, Any]):
-        self.__name__ = "livekit_dra_homes_inbound"
-        instructions = INSTRUCTIONS.replace("{{lead_honorific}}", lead_honorific)
+        self.__name__ = "livekit_livspace_inbound"
+        instructions = INSTRUCTIONS
         super().__init__(
             instructions=instructions,
             stt=elevenlabs.STT(),
             llm=google.LLM(model="gemini-2.5-flash-lite"),
             tts=elevenlabs.TTS(
                 model="eleven_flash_v2_5", 
-                voice_id="90ipbRoKi4CpHXvKVtl0",
+                voice_id="GHKbgpqchXOxta6X2lSd",
                 voice_settings=elevenlabs.VoiceSettings(
                     stability=0.5,
                     similarity_boost=0.7,
-                    speed=1.12,
+                    speed=1.10,
                 ),
                 streaming_latency=4
                 ),
@@ -145,14 +145,185 @@ class DraHomesInboundAgent(Agent):
             chat_ctx=chat_ctx,
         )
         self.dial_info = dial_info
-        self.customer_name = customer_name
-        self.lead_honorific = lead_honorific
-        self.greeting_time = greeting_time
-        self.salutation = salutation
         self.participant: rtc.RemoteParticipant | None = None
 
     async def on_enter(self) -> None:
-        await self.session.generate_reply(instructions=f"""Good {self.greeting_time}, am I speaking with {self.salutation} {self.customer_name}?""")
+        await self.session.generate_reply(instructions=INSTRUCTIONS)
+
+    @function_tool
+    async def get_project_details(self, context: RunContext, identifier: str, identifier_type: str):
+        """ Retrieves details for an existing customer's project using either their Project ID or registered mobile number (phone number).
+        
+        Args:
+            identifier: The Project ID (e.g., "BLR12345") or phone number (e.g., "9876543210").
+            identifier_type: Must be either 'project_id' or 'phone_number'.
+
+        Returns:
+            A dictionary with the details of the project.
+        """
+        logger.info(f"Getting project details for {identifier} with type {identifier_type}")
+
+        return {
+            'project_name': 'New Build Project',
+            'project_type': 'new_build',
+            'project_status': 'active',
+            'project_start_date': '2025-06-01',
+            'project_end_date': '2025-12-01',
+            'project_budget': 100000,
+            'project_location': 'Bangalore',
+            'project_owner': 'Ritesh Choudhary',
+            'project_owner_phone': '9876543210',
+            'project_owner_email': 'ritesh.choudhary@example.com',
+            'project_owner_address': '123, Main St, Bangalore, 560034',
+            'project_owner_city': 'Bangalore',
+            'project_owner_state': 'Karnataka',
+            'project_owner_country': 'India',
+            'error': None,
+        }
+
+    @function_tool
+    async def check_serviceability(self, context: RunContext, pincode: str):
+        """
+        Checks if Livspace provides services for a given pin code.
+
+        Args:
+            pincode: The 6-digit pin code to check serviceability for (e.g. "560034").
+
+        Returns:
+            A dictionary with the following keys:
+            - serviceable: True if Livspace provides services for the given pin code, False otherwise.
+            - city: The city that Livspace provides services for the given pin code.
+            - error: The error message if the pin code is invalid.
+        """
+        logger.info(f"Checking serviceability for {pincode}")
+        if len(pincode) != 6:
+            return {'serviceable': False, 'error': 'Invalid pin code. Please enter a valid 6-digit pin code.'}
+
+        serviceable_pincodes = ["560001", "560103", "560037", "560078"]
+        if pincode in serviceable_pincodes:
+            return {'serviceable': True, 'city': 'Bangalore'}
+        else:
+            return {'servicevable': False}
+        
+    @function_tool
+    async def get_minimum_budget(self, context: RunContext, city: str, project_type: str):
+        """
+        Fetches the minimum budget requirement for a specific city and project type.
+
+        Args:
+            city: The city to get the minimum budget for (e.g. "Bangalore").
+            project_type: The type of project to get the minimum budget for, must be either ("new_build" or "renovation").
+
+        Returns:
+            A dictionary with the following keys:
+            - minimum_budget: The minimum budget requirement for the given city and project type.
+            - error: The error message if the city or project type is invalid, None if successful.
+        """
+
+        return {'minimum_budget': 100000, 'error': None}
+
+    @function_tool
+    async def create_lead_ticket(self, context: RunContext, name: str, phone: str, email: str, city: str, pincode: str, project_type: str, scope_summary: str, budget: int):
+        """
+        Creates a new lead ticket in the CRM for a qualified potential customer.
+
+        Args:
+            name: The name of the customer (e.g. "John Doe").
+            phone: The phone number of the customer (e.g. "9876543210").
+            email: The email of the customer (e.g. "john.doe@example.com").
+            city: The city of the customer (e.g. "Bangalore").
+            pincode: The pin code of the customer (e.g. "560034").
+            project_type: The type of project to create a lead ticket for, must be either ("new_build" or "renovation").
+            scope_summary: The scope of the project (e.g. "Kitchen renovation").
+            budget: The budget for the project (e.g. 100000).
+
+        Returns:
+            A dictionary with the following keys:
+            - success: True if the lead ticket was created successfully, False otherwise.
+            - lead_id: The ID of the lead ticket if created successfully, None otherwise.
+            - error: The error message if the lead ticket was not created successfully, None if successful.
+        """
+
+        return {'success': True, 'lead_id': '123456', 'error': None}
+
+    @function_tool
+    async def schedule_appointment(self, context: RunContext, lead_id: str, appointment_type: str, datetime: str, notes: str):
+        """
+        Schedules an appointment (briefing call or site visit) for a new lead.
+
+        Args:
+            lead_id: The ID of the lead ticket to schedule an appointment for.
+            appointment_type: The type of appointment to schedule, must be either ("briefing_call" or "site_visit").
+            datetime: The date and time of the appointment in ISO format (e.g. "2025-06-01T10:00:00Z").
+            notes: Any additional notes for the appointment.
+
+        Returns:
+            A dictionary with the following keys:
+            - success: True if the appointment was scheduled successfully, False otherwise.
+            - appointment_id: The ID of the appointment if scheduled successfully, None otherwise.
+            - error: The error message if the appointment was not scheduled successfully, None if successful.
+        """
+
+        return {'success': True, 'appointment_id': '123456', 'error': None}
+
+    @function_tool
+    async def create_support_ticket(self, context: RunContext, project_id: str, issue_category: str, summary: str, callback_requested: bool, preferred_time: str):
+        """
+        Creates a standard support ticket for an existing project query.
+        
+        Args:
+            project_id: The ID of the project to create a support ticket for.
+            issue_category: The category of the issue to create a support ticket for,(e.g., 'Status Update', 'Payment Query', 'Delay Concern').
+            summary: The summary of the issue to create a support ticket for.
+            callback_requested: Whether the customer wants to be called back.
+            preferred_time: The preferred time for the callback.
+
+        Returns:
+            A dictionary with the following keys:
+            - success: True if the support ticket was created successfully, False otherwise.
+            - support_ticket_id: The ID of the support ticket if created successfully, None otherwise.
+            - error: The error message if the support ticket was not created successfully, None if successful.
+        """
+
+        return {'success': True, 'support_ticket_id': '123456', 'error': None}
+
+    @function_tool
+    async def create_escalation_ticket(self, context: RunContext, project_id: str, summary: str, customer_sentiment: str):
+        """
+        Creates a high-priority escalation ticket for a serious customer complaint.
+
+        Args:
+            project_id: The ID of the project to create an escalation ticket for.
+            summary: A detailed summary of the issue (customer's complaint and demands) to create an escalation ticket for.
+            customer_sentiment: The sentiment of the customer (e.g., 'angry', 'frustrated', 'threatening social media post').
+
+        Returns:
+            A dictionary with the following keys:
+            - success: True if the escalation ticket was created successfully, False otherwise.
+            - escalation_ticket_id: The ID of the escalation ticket if created successfully, None otherwise.
+            - error: The error message if the escalation ticket was not created successfully, None if successful.
+        """
+
+        return {'success': True, 'escalation_ticket_id': '123456', 'error': None}
+
+    @function_tool
+    async def update_contact_preferences(self, context: RunContext, phone: str, action: str):
+        """
+        Updates the contact preferences for a customer by adding or removing them from the contact list.
+        
+        Args:
+            phone: The phone number of the customer to update the contact preferences for.
+            action: The action to update the contact preferences for, must be either ("unsubscribe" or "delete_data").
+
+        Returns:
+            A dictionary with the following keys:
+            - success: True if the contact preferences were updated successfully, False otherwise.
+            - error: The error message if the contact preferences were not updated successfully, None if successful.
+        """
+
+        return {'success': True, 'error': None}
+
+    ##########################################################################################################################################################################################
 
     @function_tool
     async def voice_mail_detection(self, context: RunContext):
@@ -288,13 +459,7 @@ async def entrypoint(ctx: JobContext):
     participant_identity = dial_info.get("phone_number")
     phone_number = dial_info.get("phone_number")
     logger.info(f"sip_trunk_id : {trunk_id}")
-    # dynamic_vars = dial_info.get("dynamic_vars")
-    # customer_name = dial_info.get("customer_name")
-    customer_name = dial_info.get("dynamic_vars", {}).get("customer_name")
-    lead_honorific = dial_info.get("dynamic_vars", {}).get("lead_honorific")
-    greeting_time = dial_info.get("dynamic_vars", {}).get("greeting_time")
-    salutation = dial_info.get("dynamic_vars", {}).get("salutation")
-    logger.info(f"Phone number: {phone_number}, Customer name: {customer_name}, Lead honorific: {lead_honorific}, Greeting time: {greeting_time}, Salutation: {salutation}")
+    logger.info(f"Phone number: {phone_number}")
 
     # Helper to write event-specific JSONL files (one JSON object per line)
     def write_event_jsonl(data: dict, filename: str = None):
@@ -323,7 +488,7 @@ async def entrypoint(ctx: JobContext):
         file_outputs=[
             api.EncodedFileOutput(
                 file_type=api.EncodedFileType.MP4,
-                filepath=f"dra_homes_inbound/{ctx.room.name}/call_recording_{ctx.room.name}.mp4",
+                filepath=f"livspace_inbound/{ctx.room.name}/call_recording_{ctx.room.name}.mp4",
                 s3=api.S3Upload(
                     access_key=os.getenv("AWS_ACCESS_KEY_ID"),
                     secret=os.getenv("AWS_SECRET_ACCESS_KEY"),
@@ -441,18 +606,18 @@ async def entrypoint(ctx: JobContext):
             
             # Upload the single JSONL file to the same S3 folder as egress
             jsonl_filename = f"session_events_{ctx.room.name}.jsonl"
-            s3_key = f"dra_homes_inbound/{ctx.room.name}/{jsonl_filename}"
+            s3_key = f"livspace_inbound/{ctx.room.name}/{jsonl_filename}"
 
             # with open(f'room_events_{ctx.room.name}.json', 'r') as file:
             #     remote_participant_data = json.load(file)
             #     call_started_ts = remote_participant_data.get("joined_at")
-            #     s3_client.upload_file(f'room_events_{ctx.room.name}.json', s3_bucket, f"dra_homes_inbound/{ctx.room.name}/room_events_{ctx.room.name}.json")
+            #     s3_client.upload_file(f'room_events_{ctx.room.name}.json', s3_bucket, f"livspace_inbound/{ctx.room.name}/room_events_{ctx.room.name}.json")
             #     os.remove(f'room_events_{ctx.room.name}.json')
             
             if os.path.exists(jsonl_filename):
                 s3_client.upload_file(jsonl_filename, s3_bucket, s3_key)
-                s3_client.upload_file(transcript_filename, s3_bucket, f"dra_homes_inbound/{ctx.room.name}/{transcript_filename}")
-                s3_client.upload_file(summary_filename, s3_bucket, f"dra_homes_inbound/{ctx.room.name}/{summary_filename}")
+                s3_client.upload_file(transcript_filename, s3_bucket, f"livspace_inbound/{ctx.room.name}/{transcript_filename}")
+                s3_client.upload_file(summary_filename, s3_bucket, f"livspace_inbound/{ctx.room.name}/{summary_filename}")
                 logger.info(f"Uploaded events to s3://{s3_bucket}/{s3_key}")
                 
                 # Delete the local JSONL file after successful upload
@@ -472,7 +637,7 @@ async def entrypoint(ctx: JobContext):
                 "status": "completed",
                 "room_id": room_id,
                 # "call_started_ts": call_started_ts,
-                "recording_url": f"https://{os.getenv('S3_RECORDING_BUCKET')}.s3.{os.getenv('S3_RECORDING_REGION')}.amazonaws.com/dra_homes_inbound/{ctx.room.name}/call_recording_{ctx.room.name}.mp4",
+                "recording_url": f"https://{os.getenv('S3_RECORDING_BUCKET')}.s3.{os.getenv('S3_RECORDING_REGION')}.amazonaws.com/livspace_inbound/{ctx.room.name}/call_recording_{ctx.room.name}.mp4",
                 "transcript": session.history.to_dict(),
                 "summary": summary.__dict__
             }
@@ -492,7 +657,7 @@ async def entrypoint(ctx: JobContext):
     lkapi = api.LiveKitAPI()
     res = await lkapi.egress.start_room_composite_egress(req)
 
-    agent = DraHomesInboundAgent(customer_name=customer_name, lead_honorific=lead_honorific, greeting_time=greeting_time, salutation=salutation, dial_info=dial_info)
+    agent = LivspaceInboundAgent(dial_info=dial_info)
 
     # Start the session, which initializes the voice pipeline and warms up the models
     session_started = asyncio.create_task(
@@ -578,5 +743,5 @@ async def entrypoint(ctx: JobContext):
 
 
 if __name__ == "__main__":
-    cli.run_app(WorkerOptions(entrypoint_fnc=entrypoint, prewarm_fnc=prewarm, agent_name="livekit_dra_homes_inbound"))
+    cli.run_app(WorkerOptions(entrypoint_fnc=entrypoint, prewarm_fnc=prewarm, agent_name="livekit_livspace_inbound"))
     # cli.run_app(WorkerOptions(entrypoint_fnc=entrypoint, prewarm_fnc=prewarm))
