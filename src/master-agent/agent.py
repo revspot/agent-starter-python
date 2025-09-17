@@ -117,7 +117,7 @@ def identify_call_status(error: Exception) -> str:
     # All other status codes
     return "other"
 
-class DraHomesInboundAgent(Agent):
+class MasterOutboundAgent(Agent):
     def __init__(self,
                  customer_name: str,
                  lead_honorific: str,
@@ -125,7 +125,7 @@ class DraHomesInboundAgent(Agent):
                  salutation: str,
                  chat_ctx=None,
                  dial_info=dict[str, Any]):
-        self.__name__ = "livekit_dra_homes_inbound"
+        self.__name__ = "livekit_master_outbound_agent"
         instructions = INSTRUCTIONS.replace("{{lead_honorific}}", lead_honorific)
         super().__init__(
             instructions=instructions,
@@ -195,12 +195,6 @@ class DraHomesInboundAgent(Agent):
         logger.info(f"voice mail detection function called")
 
         self._closing_task = asyncio.create_task(self.session.aclose())
-        # try:
-        #     job_ctx = get_job_context()
-        #     if job_ctx is not None:
-        #         await job_ctx.api.room.delete_room(api.DeleteRoomRequest(room=job_ctx.room.name))
-        # except Exception as e:
-        #     logger.error(f"Error during call cleanup: {str(e)}")
 
     @function_tool
     async def end_call(self, context: RunContext):
@@ -243,12 +237,6 @@ class DraHomesInboundAgent(Agent):
             await current_speech.wait_for_playout()
 
         self._closing_task = asyncio.create_task(self.session.aclose())
-        # try:
-        #     job_ctx = get_job_context()
-        #     if job_ctx is not None:
-        #         await job_ctx.api.room.delete_room(api.DeleteRoomRequest(room=job_ctx.room.name))
-        # except Exception as e:
-        #     logger.error(f"Error during call cleanup: {str(e)}")
 
     def set_participant(self, participant: rtc.RemoteParticipant):
         self.participant = participant
@@ -369,36 +357,6 @@ async def entrypoint(ctx: JobContext):
     salutation = dial_info.get("dynamic_vars", {}).get("salutation")
     logger.info(f"Phone number: {phone_number}, Customer name: {customer_name}, Lead honorific: {lead_honorific}, Greeting time: {greeting_time}, Salutation: {salutation}")
 
-    # Helper to write event-specific JSONL files directly to S3 (one JSON object per line)
-    # def write_event_jsonl(data: dict, filename: str = None):
-    #     """Write event to JSONL file directly to S3"""
-    #     if filename is None:
-    #         s3_key = f"dra_homes_inbound/{ctx.room.name}/session_events_{ctx.room.name}.jsonl"
-    #     else:
-    #         s3_key = f"dra_homes_inbound/{ctx.room.name}/{filename}_{ctx.room.name}.jsonl"
-    #     
-    #     try:
-    #         upload_jsonl_to_s3(data, s3_key)
-    #         return s3_key
-    #     except Exception as e:
-    #         logger.error(f"Failed to upload JSONL to S3: {e}")
-    #         return None
-
-    # Helper to write single JSON files directly to S3 (complete JSON object)
-    # NOTE: This function OVERWRITES the file each time it's called.
-    # Use this for final summaries (transcript, summary) that should replace previous data.
-    # For individual events that should be appended, use write_event_jsonl instead.
-    # def write_event_json(data: dict, filename: str):
-    #     """Write event to JSON file directly to S3 (overwrites existing file)"""
-    #     s3_key = f"dra_homes_inbound/{ctx.room.name}/{filename}_{ctx.room.name}.json"
-    #     
-    #     try:
-    #         upload_json_to_s3(data, s3_key)
-    #         return s3_key
-    #     except Exception as e:
-    #         logger.error(f"Failed to upload JSON to S3: {e}")
-    #         return None
-
     req = api.RoomCompositeEgressRequest(
         room_name=ctx.room.name,
         layout="grid",
@@ -450,26 +408,6 @@ async def entrypoint(ctx: JobContext):
         # filename = write_event_jsonl(ev.model_dump())
         # logger.info(f"Metrics collected: {filename}")
 
-    # @session.on("speech_created")
-    # def _on_speech_created(ev: SpeechCreatedEvent):
-    #     filename = write_event_jsonl(ev.model_dump())
-    #     logger.info(f"Speech created: {filename}")
-
-    # @session.on("user_state_changed")
-    # def _on_user_state_changed(ev: UserStateChangedEvent):
-    #     filename = write_event_jsonl(ev.model_dump())
-    #     logger.info(f"User state changed: {filename}")
-
-    # @session.on("user_input_transcribed")
-    # def _on_user_input_transcribed(ev: UserInputTranscribedEvent):
-    #     filename = write_event_jsonl(ev.model_dump())
-    #     logger.info(f"User input transcribed: {filename}")
-
-    # @session.on("conversation_item_added")
-    # def _on_conversation_item_added(ev: ConversationItemAddedEvent):
-    #     filename = write_event_jsonl(ev.model_dump())
-    #     logger.info(f"Conversation item added: {filename}")
-
     @session.on("function_tools_executed")
     def _on_function_tools_executed(ev: FunctionToolsExecutedEvent):
         # filename = write_event_jsonl(ev.model_dump())
@@ -480,16 +418,6 @@ async def entrypoint(ctx: JobContext):
         asyncio.create_task(send_webhook_to_qualif(data, url))
         logger.info(f"Function tools executed")
         # logger.info(f"Function tools executed: {filename}")
-
-    # @session.on("agent_state_changed")
-    # def _on_agent_state_changed(ev: AgentStateChangedEvent):
-    #     filename = write_event_jsonl(ev.model_dump())
-    #     logger.info(f"Agent state changed: {filename}")
-    
-    # @session.on("error")
-    # def _on_error(ev: ErrorEvent):
-    #     filename = write_event_jsonl(ev.model_dump())
-    #     logger.info(f"Error: {filename}")
     
     @session.on("close")
     def _on_close(ev: CloseEvent):
@@ -506,20 +434,6 @@ async def entrypoint(ctx: JobContext):
     
 
     async def write_room_events():
-        # try:
-        #     s3_client = get_s3_client()
-            
-        #     # Write final transcript and usage data directly to S3
-        #     transcript_s3_key = write_event_json(session.history.to_dict(), "transcript")
-        #     summary = usage_collector.get_summary() if usage_collector else None
-        #     summary_s3_key = write_event_json(summary.__dict__, "summary") if summary else None
-            
-        #     logger.info(f"Uploaded transcript to S3: {transcript_s3_key}")
-        #     logger.info(f"Uploaded summary to S3: {summary_s3_key}")
-            
-        # except Exception as e:
-        #     logger.error(f"Failed to upload events to S3: {e}")
-
             
         try:
             # Get summary safely for webhook
@@ -550,7 +464,7 @@ async def entrypoint(ctx: JobContext):
     lkapi = api.LiveKitAPI()
     res = await lkapi.egress.start_room_composite_egress(req)
 
-    agent = DraHomesInboundAgent(customer_name=customer_name, lead_honorific=lead_honorific, greeting_time=greeting_time, salutation=salutation, dial_info=dial_info)
+    agent = MasterOutboundAgent(customer_name=customer_name, lead_honorific=lead_honorific, greeting_time=greeting_time, salutation=salutation, dial_info=dial_info)
 
     # Start the session, which initializes the voice pipeline and warms up the models
     session_started = asyncio.create_task(
@@ -618,17 +532,6 @@ async def entrypoint(ctx: JobContext):
             "error": str(e),
         }
         await send_webhook_to_qualif(data, url)
-
-        # logger.error(f"SIP Status Code: {sip_info.get('sip_status_code', 'Unknown')}")
-        # logger.error(f"SIP Status Message: {sip_info.get('sip_status_message', 'Unknown')}")
-        
-        # You can now use call_status to decide your action:
-        # - "busy": User is busy, you might want to retry later
-        # - "no_answer": No answer, you might want to retry or mark as no answer
-        # - "other": Other error, check logs for details
-        # - "unknown": Could not determine, check raw error
-        
-        # logger.error(f"Raw error details: {sip_info.get('raw_error', str(e))}")
         
         ctx.shutdown()
         await lkapi.aclose()
@@ -636,5 +539,4 @@ async def entrypoint(ctx: JobContext):
 
 
 if __name__ == "__main__":
-    cli.run_app(WorkerOptions(entrypoint_fnc=entrypoint, prewarm_fnc=prewarm, agent_name="livekit_dra_homes_inbound"))
-    # cli.run_app(WorkerOptions(entrypoint_fnc=entrypoint, prewarm_fnc=prewarm))
+    cli.run_app(WorkerOptions(entrypoint_fnc=entrypoint, prewarm_fnc=prewarm, agent_name="livekit_master_outbound_agent"))

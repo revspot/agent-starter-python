@@ -40,6 +40,7 @@ from livekit import api, rtc
 from livekit.agents.llm import function_tool
 from livekit.plugins import openai, deepgram, google, elevenlabs, silero, noise_cancellation
 from livekit.plugins.turn_detector.multilingual import MultilingualModel
+from livspace import project_details
 from livspace.constants import INSTRUCTIONS
 
 logger = logging.getLogger("livspace-inbound-agent")
@@ -133,7 +134,7 @@ class LivspaceInboundAgent(Agent):
             llm=google.LLM(model="gemini-2.5-flash-lite"),
             tts=elevenlabs.TTS(
                 model="eleven_flash_v2_5", 
-                voice_id="GHKbgpqchXOxta6X2lSd",
+                voice_id="H8bdWZHK2OgZwTN7ponr",
                 voice_settings=elevenlabs.VoiceSettings(
                     stability=0.5,
                     similarity_boost=0.7,
@@ -163,23 +164,14 @@ class LivspaceInboundAgent(Agent):
         """
         logger.info(f"Getting project details for {identifier} with type {identifier_type}")
 
-        return {
-            'project_name': 'New Build Project',
-            'project_type': 'new_build',
-            'project_status': 'active',
-            'project_start_date': '2025-06-01',
-            'project_end_date': '2025-12-01',
-            'project_budget': 100000,
-            'project_location': 'Bangalore',
-            'project_owner': 'Ritesh Choudhary',
-            'project_owner_phone': '9876543210',
-            'project_owner_email': 'ritesh.choudhary@example.com',
-            'project_owner_address': '123, Main St, Bangalore, 560034',
-            'project_owner_city': 'Bangalore',
-            'project_owner_state': 'Karnataka',
-            'project_owner_country': 'India',
-            'error': None,
-        }
+        if identifier == "BLR98765" or identifier == "9876543210":
+            return project_details.project_details_2
+
+        if identifier == "BLR12345" or identifier == "0123456789":
+            return project_details.project_details_1
+        
+        else:
+            return project_details.project_details_0
 
     @function_tool
     async def check_serviceability(self, context: RunContext, pincode: str):
@@ -440,6 +432,79 @@ async def send_webhook_to_qualif(data: dict, url: str):
                 logger.error(f"Error message: {error_message}")
                 raise Exception(f"Webhook failed with status {response.status}: {error_message}")
 
+def get_s3_client():
+    """Get S3 client with credentials from environment variables"""
+    s3_bucket = os.getenv("S3_RECORDING_BUCKET")
+    s3_region = os.getenv("S3_RECORDING_REGION")
+    s3_access_key = os.getenv("AWS_ACCESS_KEY_ID")
+    s3_secret_key = os.getenv("AWS_SECRET_ACCESS_KEY")
+    
+    return boto3.client(
+        "s3",
+        region_name=s3_region,
+        aws_access_key_id=s3_access_key,
+        aws_secret_access_key=s3_secret_key,
+    )
+
+def upload_json_to_s3(data: dict, s3_key: str, s3_client=None) -> str:
+    """Upload JSON data directly to S3 without writing to disk"""
+    if s3_client is None:
+        s3_client = get_s3_client()
+    
+    s3_bucket = os.getenv("S3_RECORDING_BUCKET")
+    
+    # Convert data to JSON string
+    json_str = json.dumps(data, indent=2)
+    json_bytes = json_str.encode('utf-8')
+    
+    # Upload to S3
+    s3_client.put_object(
+        Bucket=s3_bucket,
+        Key=s3_key,
+        Body=json_bytes,
+        ContentType='application/json'
+    )
+    
+    logger.info(f"Uploaded JSON to s3://{s3_bucket}/{s3_key}")
+    return s3_key
+
+def upload_jsonl_to_s3(data: dict, s3_key: str, s3_client=None) -> str:
+    """Upload JSONL data directly to S3 without writing to disk"""
+    if s3_client is None:
+        s3_client = get_s3_client()
+    
+    s3_bucket = os.getenv("S3_RECORDING_BUCKET")
+    
+    # Convert data to JSONL string
+    jsonl_str = json.dumps(data) + "\n"
+    jsonl_bytes = jsonl_str.encode('utf-8')
+    
+    # Upload to S3 (append mode by checking if object exists)
+    try:
+        # Check if object exists
+        s3_client.head_object(Bucket=s3_bucket, Key=s3_key)
+        # If exists, get current content and append
+        response = s3_client.get_object(Bucket=s3_bucket, Key=s3_key)
+        existing_content = response['Body'].read()
+        new_content = existing_content + jsonl_bytes
+    except s3_client.exceptions.NoSuchKey:
+        # If doesn't exist, create new
+        new_content = jsonl_bytes
+    except Exception as e:
+        # Handle any other S3 errors (like 404) by creating new file
+        logger.warning(f"Could not check existing object {s3_key}, creating new: {e}")
+        new_content = jsonl_bytes
+    
+    s3_client.put_object(
+        Bucket=s3_bucket,
+        Key=s3_key,
+        Body=new_content,
+        ContentType='application/x-ndjson'
+    )
+    
+    logger.info(f"Uploaded JSONL to s3://{s3_bucket}/{s3_key}")
+    return s3_key
+
 
 async def entrypoint(ctx: JobContext):
     """Entrypoint for the agent"""
@@ -461,25 +526,32 @@ async def entrypoint(ctx: JobContext):
     logger.info(f"sip_trunk_id : {trunk_id}")
     logger.info(f"Phone number: {phone_number}")
 
-    # Helper to write event-specific JSONL files (one JSON object per line)
+    # Helper to write event-specific JSONL files directly to S3 (one JSON object per line)
     def write_event_jsonl(data: dict, filename: str = None):
-        """Write event to JSONL file"""
+        """Write event to JSONL file directly to S3"""
         if filename is None:
-            filename = os.path.join(f"session_events_{ctx.room.name}.jsonl")
+            s3_key = f"livspace_inbound/{ctx.room.name}/session_events_{ctx.room.name}.jsonl"
         else:
-            filename = os.path.join(f"{filename}_{ctx.room.name}.jsonl")
-        with open(filename, "a") as f:  # "a" mode for append
-            json.dump(data, f)
-            f.write("\n")  # Add newline after each JSON object
-        return filename
+            s3_key = f"livspace_inbound/{ctx.room.name}/{filename}_{ctx.room.name}.jsonl"
+        
+        try:
+            upload_jsonl_to_s3(data, s3_key)
+            return s3_key
+        except Exception as e:
+            logger.error(f"Failed to upload JSONL to S3: {e}")
+            return None
 
-    # Helper to write single JSON files (complete JSON object)
+    # Helper to write single JSON files directly to S3 (complete JSON object)
     def write_event_json(data: dict, filename: str):
-        """Write event to JSON file"""
-        filename = os.path.join(f"{filename}_{ctx.room.name}.json")
-        with open(filename, "w") as f:  # "w" mode to overwrite
-            json.dump(data, f, indent=2)  # Pretty print for readability
-        return filename
+        """Write event to JSON file directly to S3"""
+        s3_key = f"livspace_inbound/{ctx.room.name}/{filename}_{ctx.room.name}.json"
+        
+        try:
+            upload_json_to_s3(data, s3_key)
+            return s3_key
+        except Exception as e:
+            logger.error(f"Failed to upload JSON to S3: {e}")
+            return None
 
     req = api.RoomCompositeEgressRequest(
         room_name=ctx.room.name,
@@ -518,8 +590,8 @@ async def entrypoint(ctx: JobContext):
     def _on_agent_false_interruption(ev: AgentFalseInterruptionEvent):
         logger.info("false positive interruption, resuming")
         session.generate_reply(instructions=ev.extra_instructions or NOT_GIVEN, allow_interruptions=True)
-        filename = write_event_jsonl(ev.model_dump())
-        logger.info(f"Agent false interruption: {filename}")
+        # filename = asyncio.create_task(write_event_jsonl(ev.model_dump()))
+        # logger.info(f"Agent false interruption: {filename}")
 
     # Metrics collection, to measure pipeline performance
     # For more information, see https://docs.livekit.io/agents/build/metrics/
@@ -529,53 +601,55 @@ async def entrypoint(ctx: JobContext):
     def _on_metrics_collected(ev: MetricsCollectedEvent):
         metrics.log_metrics(ev.metrics)
         usage_collector.collect(ev.metrics)
-        filename = write_event_jsonl(ev.model_dump())
-        logger.info(f"Metrics collected: {filename}")
+        # filename = asyncio.create_task(write_event_jsonl(ev.model_dump()))
+        # logger.info(f"Metrics collected: {filename}")
 
-    @session.on("speech_created")
-    def _on_speech_created(ev: SpeechCreatedEvent):
-        filename = write_event_jsonl(ev.model_dump())
-        logger.info(f"Speech created: {filename}")
+    # @session.on("speech_created")
+    # def _on_speech_created(ev: SpeechCreatedEvent):
+    #     filename = asyncio.create_task(write_event_jsonl(ev.model_dump()))
+    #     logger.info(f"Speech created: {filename}")
 
-    @session.on("user_state_changed")
-    def _on_user_state_changed(ev: UserStateChangedEvent):
-        filename = write_event_jsonl(ev.model_dump())
-        logger.info(f"User state changed: {filename}")
+    # @session.on("user_state_changed")
+    # def _on_user_state_changed(ev: UserStateChangedEvent):
+    #     filename = asyncio.create_task(write_event_jsonl(ev.model_dump()))
+    #     logger.info(f"User state changed: {filename}")
 
-    @session.on("user_input_transcribed")
-    def _on_user_input_transcribed(ev: UserInputTranscribedEvent):
-        filename = write_event_jsonl(ev.model_dump())
-        logger.info(f"User input transcribed: {filename}")
+    # @session.on("user_input_transcribed")
+    # def _on_user_input_transcribed(ev: UserInputTranscribedEvent):
+    #     filename = asyncio.create_task(write_event_jsonl(ev.model_dump()))
+    #     logger.info(f"User input transcribed: {filename}")
 
-    @session.on("conversation_item_added")
-    def _on_conversation_item_added(ev: ConversationItemAddedEvent):
-        filename = write_event_jsonl(ev.model_dump())
-        logger.info(f"Conversation item added: {filename}")
+    # @session.on("conversation_item_added")
+    # def _on_conversation_item_added(ev: ConversationItemAddedEvent):
+    #     filename = asyncio.create_task(write_event_jsonl(ev.model_dump()))
+    #     logger.info(f"Conversation item added: {filename}")
 
     @session.on("function_tools_executed")
     def _on_function_tools_executed(ev: FunctionToolsExecutedEvent):
-        filename = write_event_jsonl(ev.model_dump())
+        # filename = write_event_jsonl(ev.model_dump())
         data = ev.model_dump()
         data["event"] = "function_tools_executed"
         data["room"] = {"sid": room_id}
         url = f"https://qualif.revspot.ai/livekit/events"
         asyncio.create_task(send_webhook_to_qualif(data, url))
-        logger.info(f"Function tools executed: {filename}")
+        logger.info(f"Function tools executed")
+        # logger.info(f"Function tools executed: {filename}")
 
-    @session.on("agent_state_changed")
-    def _on_agent_state_changed(ev: AgentStateChangedEvent):
-        filename = write_event_jsonl(ev.model_dump())
-        logger.info(f"Agent state changed: {filename}")
+    # @session.on("agent_state_changed")
+    # def _on_agent_state_changed(ev: AgentStateChangedEvent):
+    #     filename = asyncio.create_task(write_event_jsonl(ev.model_dump()))
+    #     logger.info(f"Agent state changed: {filename}")
     
-    @session.on("error")
-    def _on_error(ev: ErrorEvent):
-        filename = write_event_jsonl(ev.model_dump())
-        logger.info(f"Error: {filename}")
+    # @session.on("error")
+    # def _on_error(ev: ErrorEvent):
+    #     filename = asyncio.create_task(write_event_jsonl(ev.model_dump()))
+    #     logger.info(f"Error: {filename}")
     
     @session.on("close")
     def _on_close(ev: CloseEvent):
-        filename = write_event_jsonl(ev.model_dump())
-        logger.info(f"Close: {filename}")
+    #     filename = write_event_jsonl(ev.model_dump())
+        # logger.info(f"Close: {filename}")
+        logger.info(f"Session closed")
         data = ev.model_dump()
         data["event"] = "session_closed"
         data["room"] = {"sid": room_id}
@@ -586,52 +660,25 @@ async def entrypoint(ctx: JobContext):
     
 
     async def write_room_events():
-        s3_bucket = os.getenv("S3_RECORDING_BUCKET")
-        s3_region = os.getenv("S3_RECORDING_REGION")
-        s3_access_key = os.getenv("AWS_ACCESS_KEY_ID")
-        s3_secret_key = os.getenv("AWS_SECRET_ACCESS_KEY")
-
-        try:
-            s3_client = boto3.client(
-                "s3",
-                region_name=s3_region,
-                aws_access_key_id=s3_access_key,
-                aws_secret_access_key=s3_secret_key,
-            )
+        # try:
+        #     s3_client = get_s3_client()
             
-            # Write final transcript and usage data to the single JSON file
-            transcript_filename = write_event_json(session.history.to_dict(), "transcript")
-            summary = usage_collector.get_summary()
-            summary_filename = write_event_json(summary.__dict__, "summary")
+        #     # Write final transcript and usage data directly to S3
+        #     transcript_s3_key = asyncio.create_task(write_event_json(session.history.to_dict(), "transcript"))
+        #     summary = usage_collector.get_summary()
+        #     summary_s3_key = asyncio.create_task(write_event_json(summary.__dict__, "summary")) 
             
-            # Upload the single JSONL file to the same S3 folder as egress
-            jsonl_filename = f"session_events_{ctx.room.name}.jsonl"
-            s3_key = f"livspace_inbound/{ctx.room.name}/{jsonl_filename}"
-
-            # with open(f'room_events_{ctx.room.name}.json', 'r') as file:
-            #     remote_participant_data = json.load(file)
-            #     call_started_ts = remote_participant_data.get("joined_at")
-            #     s3_client.upload_file(f'room_events_{ctx.room.name}.json', s3_bucket, f"livspace_inbound/{ctx.room.name}/room_events_{ctx.room.name}.json")
-            #     os.remove(f'room_events_{ctx.room.name}.json')
+        #     logger.info(f"Uploaded transcript to S3: {transcript_s3_key}")
+        #     logger.info(f"Uploaded summary to S3: {summary_s3_key}")
             
-            if os.path.exists(jsonl_filename):
-                s3_client.upload_file(jsonl_filename, s3_bucket, s3_key)
-                s3_client.upload_file(transcript_filename, s3_bucket, f"livspace_inbound/{ctx.room.name}/{transcript_filename}")
-                s3_client.upload_file(summary_filename, s3_bucket, f"livspace_inbound/{ctx.room.name}/{summary_filename}")
-                logger.info(f"Uploaded events to s3://{s3_bucket}/{s3_key}")
-                
-                # Delete the local JSONL file after successful upload
-                os.remove(jsonl_filename)
-                os.remove(transcript_filename)
-                os.remove(summary_filename)
-                logger.info(f"Deleted local file: {jsonl_filename}")
-            else:
-                logger.warning(f"JSONL file {jsonl_filename} not found for upload")
-        except Exception as e:
-            logger.error(f"Failed to upload events to S3: {e}")
+        # except Exception as e:
+        #     logger.error(f"Failed to upload events to S3: {e}")
 
             
         try:
+            # Get summary safely for webhook
+            summary = usage_collector.get_summary() if usage_collector else None
+            
             data = {
                 "conversation_id": ctx.room.name,
                 "status": "completed",
@@ -639,7 +686,7 @@ async def entrypoint(ctx: JobContext):
                 # "call_started_ts": call_started_ts,
                 "recording_url": f"https://{os.getenv('S3_RECORDING_BUCKET')}.s3.{os.getenv('S3_RECORDING_REGION')}.amazonaws.com/livspace_inbound/{ctx.room.name}/call_recording_{ctx.room.name}.mp4",
                 "transcript": session.history.to_dict(),
-                "summary": summary.__dict__
+                "summary": summary.__dict__ if summary else {}
             }
 
             url = f"https://qualif.revspot.ai/livekit/webhook_listener/{bridge_id}"

@@ -40,6 +40,7 @@ from livekit.agents.llm import function_tool
 from livekit.plugins import openai, deepgram, google, elevenlabs, silero, noise_cancellation
 from livekit.plugins.turn_detector.multilingual import MultilingualModel
 from meragi_inbound.constants import INSTRUCTIONS
+from openai.types.beta.realtime.session import TurnDetection as OpenAITurnDetection
 
 logger = logging.getLogger("meragi-inbound-agent")
 load_dotenv(".env.local")
@@ -53,24 +54,24 @@ class MeragiInboundAgent(Agent):
         instructions = INSTRUCTIONS.replace("{{customer_name}}", customer_name)
         super().__init__(
             instructions=instructions,
-            stt=deepgram.STT(),
-            llm=google.LLM(model="gemini-2.5-flash-lite"),
-            tts=elevenlabs.TTS(voice_id="H8bdWZHK2OgZwTN7ponr"),
-            turn_detection=MultilingualModel(),
+            # stt=deepgram.STT(),
+            # llm=google.LLM(model="gemini-2.5-flash-lite"),
+            # tts=elevenlabs.TTS(voice_id="H8bdWZHK2OgZwTN7ponr"),
+            # turn_detection=MultilingualModel(),
             chat_ctx=chat_ctx,
-            # llm=openai.realtime.RealtimeModel(
-            #     model="gpt-4o-mini-realtime-preview",
-            #     voice="marin",
-            #     temperature=0.8,
-            #     turn_detection=openai.realtime.TurnDetection(
-            #             type="server_vad",
-            #             threshold=0.5,
-            #             prefix_padding_ms=300,
-            #             silence_duration_ms=500,
-            #             create_response=True,
-            #             interrupt_response=True,
-            #         )
-            #     )
+            llm=openai.realtime.RealtimeModel(
+                model="gpt-4o-mini-realtime-preview",
+                voice="marin",
+                temperature=0.8,
+                turn_detection=OpenAITurnDetection(
+                        type="server_vad",
+                        threshold=0.5,
+                        prefix_padding_ms=300,
+                        silence_duration_ms=500,
+                        create_response=True,
+                        interrupt_response=True,
+                    )
+                )
         )
         self.dial_info = dial_info
         self.customer_name = customer_name
