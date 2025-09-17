@@ -40,9 +40,8 @@ from livekit import api, rtc
 from livekit.agents.llm import function_tool
 from livekit.plugins import openai, deepgram, google, elevenlabs, silero, noise_cancellation
 from livekit.plugins.turn_detector.multilingual import MultilingualModel
-from dra_homes_inbound.constants import INSTRUCTIONS
 
-logger = logging.getLogger("dra-homes-inbound-agent")
+logger = logging.getLogger("master-outbound-agent")
 load_dotenv(".env.local")
 
 def extract_sip_status_from_error(error: Exception) -> dict:
@@ -119,40 +118,22 @@ def identify_call_status(error: Exception) -> str:
 
 class MasterOutboundAgent(Agent):
     def __init__(self,
-                 customer_name: str,
-                 lead_honorific: str,
-                 greeting_time: str,
-                 salutation: str,
                  chat_ctx=None,
+                 enter_instructions=None,
+                 instructions=None,
                  dial_info=dict[str, Any]):
         self.__name__ = "livekit_master_outbound_agent"
-        instructions = INSTRUCTIONS.replace("{{lead_honorific}}", lead_honorific)
         super().__init__(
             instructions=instructions,
-            stt=elevenlabs.STT(),
-            llm=google.LLM(model="gemini-2.5-flash-lite"),
-            tts=elevenlabs.TTS(
-                model="eleven_flash_v2_5", 
-                voice_id="90ipbRoKi4CpHXvKVtl0",
-                voice_settings=elevenlabs.VoiceSettings(
-                    stability=0.5,
-                    similarity_boost=0.7,
-                    speed=1.12,
-                ),
-                streaming_latency=4
-                ),
-            turn_detection=MultilingualModel(),
             chat_ctx=chat_ctx,
         )
+        self.enter_instructions = enter_instructions
         self.dial_info = dial_info
-        self.customer_name = customer_name
-        self.lead_honorific = lead_honorific
-        self.greeting_time = greeting_time
-        self.salutation = salutation
         self.participant: rtc.RemoteParticipant | None = None
 
     async def on_enter(self) -> None:
-        await self.session.generate_reply(instructions=f"""Good {self.greeting_time}, am I speaking with {self.salutation} {self.customer_name}?""")
+        if self.enter_instructions:
+            await self.session.generate_reply(instructions=self.enter_instructions)
 
     @function_tool
     async def voice_mail_detection(self, context: RunContext):
@@ -259,7 +240,6 @@ async def send_webhook_to_qualif(data: dict, url: str):
 
 def get_s3_client():
     """Get S3 client with credentials from environment variables"""
-    s3_bucket = os.getenv("S3_RECORDING_BUCKET")
     s3_region = os.getenv("S3_RECORDING_REGION")
     s3_access_key = os.getenv("AWS_ACCESS_KEY_ID")
     s3_secret_key = os.getenv("AWS_SECRET_ACCESS_KEY")
@@ -330,6 +310,51 @@ def upload_jsonl_to_s3(data: dict, s3_key: str, s3_client=None) -> str:
     logger.info(f"Uploaded JSONL to s3://{s3_bucket}/{s3_key}")
     return s3_key
 
+def get_instructions(instructions_link: str, s3_client=None):
+    if s3_client is None:
+        s3_client = get_s3_client()
+    response = s3_client.get_object(Bucket="livekit-agents-prompt", Key=instructions_link)
+    return response["Body"].read().decode("utf-8")
+
+def get_llm_provider(llm_config: dict):
+    if llm_config.get("provider") == "openai":
+        return openai.LLM(
+            model=llm_config.get("model"),
+            temperature=llm_config.get("temperature")
+        )
+    elif llm_config.get("provider") == "google":
+        return google.LLM(
+            model=llm_config.get("model"),
+            temperature=llm_config.get("temperature")
+        )
+    else:
+        raise ValueError(f"Invalid LLM provider: {llm_config.get('provider')}")
+
+def get_stt_provider(stt_config: dict):
+    if stt_config.get("provider") == "deepgram":
+        return deepgram.STT()
+    elif stt_config.get("provider") == "elevenlabs":
+        return elevenlabs.STT()
+    elif stt_config.get("provider") == "google":
+        return google.STT()
+    else:
+        raise ValueError(f"Invalid STT provider: {stt_config.get('provider')}")
+
+def get_tts_provider(tts_config: dict):
+    if tts_config.get("provider") == "elevenlabs":
+        return elevenlabs.TTS(
+            model=tts_config.get("model", "eleven_flash_v2_5"),
+            voice_id=tts_config.get("voice_id", "90ipbRoKi4CpHXvKVtl0"),
+            voice_settings=elevenlabs.VoiceSettings(
+                stability=tts_config.get("voice_settings", {}).get("stability", 0.5),
+                similarity_boost=tts_config.get("voice_settings", {}).get("similarity_boost", 0.7),
+                speed=tts_config.get("voice_settings", {}).get("speed", 1.12)
+            ),
+            streaming_latency=tts_config.get("voice_settings", {}).get("streaming_latency", 4)
+        )
+    else:
+        raise ValueError(f"Invalid TTS provider: {tts_config.get('provider')}")
+
 
 async def entrypoint(ctx: JobContext):
     """Entrypoint for the agent"""
@@ -349,13 +374,39 @@ async def entrypoint(ctx: JobContext):
     participant_identity = dial_info.get("phone_number")
     phone_number = dial_info.get("phone_number")
     logger.info(f"sip_trunk_id : {trunk_id}")
-    # dynamic_vars = dial_info.get("dynamic_vars")
-    # customer_name = dial_info.get("customer_name")
-    customer_name = dial_info.get("dynamic_vars", {}).get("customer_name")
-    lead_honorific = dial_info.get("dynamic_vars", {}).get("lead_honorific")
-    greeting_time = dial_info.get("dynamic_vars", {}).get("greeting_time")
-    salutation = dial_info.get("dynamic_vars", {}).get("salutation")
+
+    dynamic_vars = dial_info.get("dynamic_vars", {})
+    customer_name = dynamic_vars.get("customer_name")
+    lead_honorific = dynamic_vars.get("lead_honorific")
+    greeting_time = dynamic_vars.get("greeting_time")
+    salutation = dynamic_vars.get("salutation")
     logger.info(f"Phone number: {phone_number}, Customer name: {customer_name}, Lead honorific: {lead_honorific}, Greeting time: {greeting_time}, Salutation: {salutation}")
+
+    agent_id = dial_info.get("agent_id")
+    agent_config = dial_info.get("agent_config", {})
+    instructions_link = agent_config.get("instructions")
+    model_type = agent_config.get("model_type")
+    stt_config = agent_config.get("stt_config")
+    tts_config = agent_config.get("tts_config")
+    llm_config = agent_config.get("llm_config")
+    enter_instructions = f"Good {greeting_time}, am I speaking with {salutation} {customer_name}?" if not agent_config.get("enter_instructions") else agent_config.get("enter_instructions")
+    instructions = get_instructions(instructions_link)
+
+
+    # Set up a voice AI pipeline using OpenAI, Cartesia, Deepgram, and the LiveKit turn detector
+    session = AgentSession(
+        stt=get_stt_provider(stt_config),
+        llm=get_llm_provider(llm_config),
+        tts=get_tts_provider(tts_config),
+        turn_detection=MultilingualModel(),
+        vad=ctx.proc.userdata["vad"],
+        false_interruption_timeout=1.0,  # Wait 1 second before resuming
+        resume_false_interruption=True,   # Enable auto-resume
+        preemptive_generation=True,
+        # allow_interruptions=True,
+        # min_interruption_duration=0.5,
+        # min_interruption_words=2
+    )
 
     req = api.RoomCompositeEgressRequest(
         room_name=ctx.room.name,
@@ -364,7 +415,7 @@ async def entrypoint(ctx: JobContext):
         file_outputs=[
             api.EncodedFileOutput(
                 file_type=api.EncodedFileType.MP4,
-                filepath=f"dra_homes_inbound/{ctx.room.name}/call_recording_{ctx.room.name}.mp4",
+                filepath=f"{agent_id}/{ctx.room.name}/call_recording_{ctx.room.name}.mp4",
                 s3=api.S3Upload(
                     access_key=os.getenv("AWS_ACCESS_KEY_ID"),
                     secret=os.getenv("AWS_SECRET_ACCESS_KEY"),
@@ -373,19 +424,6 @@ async def entrypoint(ctx: JobContext):
                 ),
             ),
         ],
-    )
-
-
-
-    # Set up a voice AI pipeline using OpenAI, Cartesia, Deepgram, and the LiveKit turn detector
-    session = AgentSession(
-        vad=ctx.proc.userdata["vad"],
-        false_interruption_timeout=1.0,  # Wait 1 second before resuming
-        resume_false_interruption=True,   # Enable auto-resume
-        preemptive_generation=True,
-        # allow_interruptions=True,
-        # min_interruption_duration=0.5,
-        # min_interruption_words=2
     )
 
     # sometimes background noise could interrupt the agent session, these are considered false positive interruptions
@@ -444,7 +482,7 @@ async def entrypoint(ctx: JobContext):
                 "status": "completed",
                 "room_id": room_id,
                 # "call_started_ts": call_started_ts,
-                "recording_url": f"https://{os.getenv('S3_RECORDING_BUCKET')}.s3.{os.getenv('S3_RECORDING_REGION')}.amazonaws.com/dra_homes_inbound/{ctx.room.name}/call_recording_{ctx.room.name}.mp4",
+                "recording_url": f"https://{os.getenv('S3_RECORDING_BUCKET')}.s3.{os.getenv('S3_RECORDING_REGION')}.amazonaws.com/{agent_id}/{ctx.room.name}/call_recording_{ctx.room.name}.mp4",
                 "transcript": session.history.to_dict(),
                 "summary": summary.__dict__ if summary else {}
             }
@@ -464,7 +502,7 @@ async def entrypoint(ctx: JobContext):
     lkapi = api.LiveKitAPI()
     res = await lkapi.egress.start_room_composite_egress(req)
 
-    agent = MasterOutboundAgent(customer_name=customer_name, lead_honorific=lead_honorific, greeting_time=greeting_time, salutation=salutation, dial_info=dial_info)
+    agent = MasterOutboundAgent(dial_info=dial_info, enter_instructions=enter_instructions, instructions=instructions)
 
     # Start the session, which initializes the voice pipeline and warms up the models
     session_started = asyncio.create_task(
