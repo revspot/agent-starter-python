@@ -163,9 +163,8 @@ async def entrypoint(ctx: JobContext):
         vad=ctx.proc.userdata["vad"],
         preemptive_generation=True,
     )
-
-
-
+    
+    
     # sometimes background noise could interrupt the agent session, these are considered false positive interruptions
     # when it's detected, you may resume the agent's speech
     @session.on("agent_false_interruption")
