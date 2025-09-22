@@ -391,6 +391,7 @@ async def entrypoint(ctx: JobContext):
     llm_config = agent_config.get("llm_config")
     enter_instructions = f"Good {greeting_time}, am I speaking with {salutation} {customer_name}?" if not agent_config.get("enter_instructions") else agent_config.get("enter_instructions")
     instructions = get_instructions(instructions_link)
+    instructions = instructions.replace("{{lead_honorific}}", lead_honorific)
 
 
     # Set up a voice AI pipeline using OpenAI, Cartesia, Deepgram, and the LiveKit turn detector
@@ -415,7 +416,7 @@ async def entrypoint(ctx: JobContext):
         file_outputs=[
             api.EncodedFileOutput(
                 file_type=api.EncodedFileType.MP4,
-                filepath=f"{agent_id}/{ctx.room.name}/call_recording_{ctx.room.name}.mp4",
+                filepath=f"call_recording_{ctx.room.name}.mp4",
                 s3=api.S3Upload(
                     access_key=os.getenv("AWS_ACCESS_KEY_ID"),
                     secret=os.getenv("AWS_SECRET_ACCESS_KEY"),
@@ -482,7 +483,7 @@ async def entrypoint(ctx: JobContext):
                 "status": "completed",
                 "room_id": room_id,
                 # "call_started_ts": call_started_ts,
-                "recording_url": f"https://{os.getenv('S3_RECORDING_BUCKET')}.s3.{os.getenv('S3_RECORDING_REGION')}.amazonaws.com/{agent_id}/{ctx.room.name}/call_recording_{ctx.room.name}.mp4",
+                "recording_url": f"https://{os.getenv('S3_RECORDING_BUCKET')}.s3.{os.getenv('S3_RECORDING_REGION')}.amazonaws.com/call_recording_{ctx.room.name}.mp4",
                 "transcript": session.history.to_dict(),
                 "summary": summary.__dict__ if summary else {}
             }
