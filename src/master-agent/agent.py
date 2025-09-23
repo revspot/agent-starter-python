@@ -5,10 +5,8 @@ import os
 from typing import Any
 import asyncio
 import aiohttp
-import re
 
 import boto3
-import datetime
 from dotenv import load_dotenv
 import json
 from livekit.agents import (
@@ -19,102 +17,24 @@ from livekit.agents import (
     JobContext,
     JobProcess,
     MetricsCollectedEvent,
-    SpeechCreatedEvent,
-    UserStateChangedEvent,
-    UserInputTranscribedEvent,
-    ConversationItemAddedEvent,
     FunctionToolsExecutedEvent,
-    AgentStateChangedEvent,
-    ErrorEvent,
     CloseEvent,
     RoomInputOptions,
     RunContext,
     WorkerOptions,
     cli,
-    metrics,
-    get_job_context,
+    metrics
 )
 
 from livekit import api, rtc
-
 from livekit.agents.llm import function_tool
 from livekit.plugins import openai, deepgram, google, elevenlabs, silero, noise_cancellation
 from livekit.plugins.turn_detector.multilingual import MultilingualModel
 
+from utils.telephony_utils import identify_call_status
+
 logger = logging.getLogger("master-outbound-agent")
 load_dotenv(".env.local")
-
-def extract_sip_status_from_error(error: Exception) -> dict:
-    """
-    Extract SIP status information from TwirpError or other SIP-related exceptions.
-    
-    Returns a dictionary with SIP status details:
-    - sip_status_code: The numeric SIP status code (e.g., 486, 503)
-    - sip_status_message: The human-readable status message (e.g., "User Busy")
-    - error_type: The type of error (e.g., "TwirpError")
-    - raw_error: The original error message
-    """
-    sip_info = {
-        "sip_status_code": None,
-        "sip_status_message": None,
-        "error_type": type(error).__name__,
-        "raw_error": str(error)
-    }
-    
-    error_str = str(error)
-    
-    # Check if it's a TwirpError with SIP status information
-    if "TwirpError" in error_str and "sip status" in error_str.lower():
-        # Extract SIP status code using regex
-        sip_code_match = re.search(r'sip status:\s*(\d+)', error_str)
-        if sip_code_match:
-            sip_info["sip_status_code"] = int(sip_code_match.group(1))
-        
-        # Extract SIP status message
-        sip_message_match = re.search(r'sip status:\s*\d+:\s*([^,]+)', error_str)
-        if sip_message_match:
-            sip_info["sip_status_message"] = sip_message_match.group(1).strip()
-    
-    # Check for metadata with SIP information
-    if hasattr(error, 'metadata') and error.metadata:
-        metadata = error.metadata
-        if 'sip_status' in metadata:
-            sip_info["sip_status_message"] = metadata['sip_status']
-        if 'sip_status_code' in metadata:
-            sip_info["sip_status_code"] = int(metadata['sip_status_code'])
-    
-    return sip_info
-
-def identify_call_status(error: Exception) -> str:
-    """
-    Simple function to identify if a SIP call failed due to no-answer or busy status.
-    
-    Args:
-        error: The exception that occurred during SIP participant creation
-        
-    Returns:
-        str: One of the following:
-        - "busy" - User is busy (486, 600)
-        - "no_answer" - No answer (408, 480, 504, 603, 604)
-        - "other" - Other error types
-        - "unknown" - Could not determine status
-    """
-    sip_info = extract_sip_status_from_error(error)
-    status_code = sip_info.get('sip_status_code')
-    
-    if not status_code:
-        return "unknown"
-    
-    # Busy status codes
-    if status_code in [486, 600]:
-        return "busy"
-    
-    # No answer status codes
-    if status_code in [408, 480, 504, 603, 604]:
-        return "no_answer"
-    
-    # All other status codes
-    return "other"
 
 class MasterOutboundAgent(Agent):
     def __init__(self,
@@ -251,65 +171,6 @@ def get_s3_client():
         aws_secret_access_key=s3_secret_key,
     )
 
-def upload_json_to_s3(data: dict, s3_key: str, s3_client=None) -> str:
-    """Upload JSON data directly to S3 without writing to disk"""
-    if s3_client is None:
-        s3_client = get_s3_client()
-    
-    s3_bucket = os.getenv("S3_RECORDING_BUCKET")
-    
-    # Convert data to JSON string
-    json_str = json.dumps(data, indent=2)
-    json_bytes = json_str.encode('utf-8')
-    
-    # Upload to S3
-    s3_client.put_object(
-        Bucket=s3_bucket,
-        Key=s3_key,
-        Body=json_bytes,
-        ContentType='application/json'
-    )
-    
-    logger.info(f"Uploaded JSON to s3://{s3_bucket}/{s3_key}")
-    return s3_key
-
-def upload_jsonl_to_s3(data: dict, s3_key: str, s3_client=None) -> str:
-    """Upload JSONL data directly to S3 without writing to disk"""
-    if s3_client is None:
-        s3_client = get_s3_client()
-    
-    s3_bucket = os.getenv("S3_RECORDING_BUCKET")
-    
-    # Convert data to JSONL string
-    jsonl_str = json.dumps(data) + "\n"
-    jsonl_bytes = jsonl_str.encode('utf-8')
-    
-    # Upload to S3 (append mode by checking if object exists)
-    try:
-        # Check if object exists
-        s3_client.head_object(Bucket=s3_bucket, Key=s3_key)
-        # If exists, get current content and append
-        response = s3_client.get_object(Bucket=s3_bucket, Key=s3_key)
-        existing_content = response['Body'].read()
-        new_content = existing_content + jsonl_bytes
-    except s3_client.exceptions.NoSuchKey:
-        # If doesn't exist, create new
-        new_content = jsonl_bytes
-    except Exception as e:
-        # Handle any other S3 errors (like 404) by creating new file
-        logger.warning(f"Could not check existing object {s3_key}, creating new: {e}")
-        new_content = jsonl_bytes
-    
-    s3_client.put_object(
-        Bucket=s3_bucket,
-        Key=s3_key,
-        Body=new_content,
-        ContentType='application/x-ndjson'
-    )
-    
-    logger.info(f"Uploaded JSONL to s3://{s3_bucket}/{s3_key}")
-    return s3_key
-
 def get_instructions(instructions_link: str, s3_client=None):
     if s3_client is None:
         s3_client = get_s3_client()
@@ -433,8 +294,6 @@ async def entrypoint(ctx: JobContext):
     def _on_agent_false_interruption(ev: AgentFalseInterruptionEvent):
         logger.info("false positive interruption, resuming")
         session.generate_reply(instructions=ev.extra_instructions or NOT_GIVEN, allow_interruptions=True)
-        # filename = write_event_jsonl(ev.model_dump())
-        # logger.info(f"Agent false interruption: {filename}")
 
     # Metrics collection, to measure pipeline performance
     # For more information, see https://docs.livekit.io/agents/build/metrics/
@@ -444,24 +303,18 @@ async def entrypoint(ctx: JobContext):
     def _on_metrics_collected(ev: MetricsCollectedEvent):
         metrics.log_metrics(ev.metrics)
         usage_collector.collect(ev.metrics)
-        # filename = write_event_jsonl(ev.model_dump())
-        # logger.info(f"Metrics collected: {filename}")
 
     @session.on("function_tools_executed")
     def _on_function_tools_executed(ev: FunctionToolsExecutedEvent):
-        # filename = write_event_jsonl(ev.model_dump())
         data = ev.model_dump()
         data["event"] = "function_tools_executed"
         data["room"] = {"sid": room_id}
         url = f"https://qualif.revspot.ai/livekit/events"
         asyncio.create_task(send_webhook_to_qualif(data, url))
         logger.info(f"Function tools executed")
-        # logger.info(f"Function tools executed: {filename}")
     
     @session.on("close")
     def _on_close(ev: CloseEvent):
-        # filename = write_event_jsonl(ev.model_dump())
-        # logger.info(f"Close: {filename}")
         logger.info(f"Session closed")
         data = ev.model_dump()
         data["event"] = "session_closed"
@@ -469,7 +322,6 @@ async def entrypoint(ctx: JobContext):
         url = f"https://qualif.revspot.ai/livekit/events"
         asyncio.create_task(send_webhook_to_qualif(data, url))
         ctx.delete_room()
-        # await job_ctx.api.room.delete_room(api.DeleteRoomRequest(room=job_ctx.room.name))
     
 
     async def write_room_events():
@@ -482,8 +334,7 @@ async def entrypoint(ctx: JobContext):
                 "conversation_id": ctx.room.name,
                 "status": "completed",
                 "room_id": room_id,
-                # "call_started_ts": call_started_ts,
-                "recording_url": f"https://{os.getenv('S3_RECORDING_BUCKET')}.s3.{os.getenv('S3_RECORDING_REGION')}.amazonaws.com/call_recording_{ctx.room.name}.mp4",
+                "recording_url": f"https://recordings.qualif.revspot.ai/call_recording_{ctx.room.name}.mp4",
                 "transcript": session.history.to_dict(),
                 "summary": summary.__dict__ if summary else {}
             }
@@ -522,7 +373,6 @@ async def entrypoint(ctx: JobContext):
         await ctx.api.sip.create_sip_participant(
             api.CreateSIPParticipantRequest(
                 room_name=ctx.room.name,
-                # sip_trunk_id=os.getenv("SIP_OUTBOUND_TRUNK_ID"),
                 sip_trunk_id=trunk_id,
                 sip_call_to=phone_number,
                 participant_identity=participant_identity,
@@ -538,13 +388,7 @@ async def entrypoint(ctx: JobContext):
         await lkapi.aclose()
         
     except Exception as e:
-        # Identify the call status (busy, no_answer, other, unknown)
         call_status = identify_call_status(e)
-        
-        # # Extract SIP status information for detailed logging
-        # sip_info = extract_sip_status_from_error(e)
-        
-        # Log the call status and SIP details
         logger.error(f"Failed to create SIP participant: {e}")
         logger.error(f"Call Status: {call_status}")
 

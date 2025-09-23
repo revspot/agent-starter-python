@@ -7,10 +7,7 @@ import asyncio
 import aiohttp
 from functools import wraps
 from typing import Dict, Any
-import re
 
-# import boto3
-# import datetime
 from dotenv import load_dotenv
 import json
 from livekit.agents import (
@@ -21,13 +18,7 @@ from livekit.agents import (
     JobContext,
     JobProcess,
     MetricsCollectedEvent,
-    # SpeechCreatedEvent,
-    # UserStateChangedEvent,
-    # UserInputTranscribedEvent,
-    # ConversationItemAddedEvent,
     FunctionToolsExecutedEvent,
-    # AgentStateChangedEvent,
-    # ErrorEvent,
     CloseEvent,
     RoomInputOptions,
     RunContext,
@@ -45,162 +36,17 @@ from livspace import project_details
 from livspace.pincodes import serviceable_pincodes
 from livspace.constants import INSTRUCTIONS
 
+from utils.telephony_utils import identify_call_status
+from utils.api_utils import get_api_data_async
+
 logger = logging.getLogger("livspace-inbound-agent")
 load_dotenv(".env.local")
-
-def extract_sip_status_from_error(error: Exception) -> dict:
-    """
-    Extract SIP status information from TwirpError or other SIP-related exceptions.
-    
-    Returns a dictionary with SIP status details:
-    - sip_status_code: The numeric SIP status code (e.g., 486, 503)
-    - sip_status_message: The human-readable status message (e.g., "User Busy")
-    - error_type: The type of error (e.g., "TwirpError")
-    - raw_error: The original error message
-    """
-    sip_info = {
-        "sip_status_code": None,
-        "sip_status_message": None,
-        "error_type": type(error).__name__,
-        "raw_error": str(error)
-    }
-    
-    error_str = str(error)
-    
-    # Check if it's a TwirpError with SIP status information
-    if "TwirpError" in error_str and "sip status" in error_str.lower():
-        # Extract SIP status code using regex
-        sip_code_match = re.search(r'sip status:\s*(\d+)', error_str)
-        if sip_code_match:
-            sip_info["sip_status_code"] = int(sip_code_match.group(1))
-        
-        # Extract SIP status message
-        sip_message_match = re.search(r'sip status:\s*\d+:\s*([^,]+)', error_str)
-        if sip_message_match:
-            sip_info["sip_status_message"] = sip_message_match.group(1).strip()
-    
-    # Check for metadata with SIP information
-    if hasattr(error, 'metadata') and error.metadata:
-        metadata = error.metadata
-        if 'sip_status' in metadata:
-            sip_info["sip_status_message"] = metadata['sip_status']
-        if 'sip_status_code' in metadata:
-            sip_info["sip_status_code"] = int(metadata['sip_status_code'])
-    
-    return sip_info
-
-def identify_call_status(error: Exception) -> str:
-    """
-    Simple function to identify if a SIP call failed due to no-answer or busy status.
-    
-    Args:
-        error: The exception that occurred during SIP participant creation
-        
-    Returns:
-        str: One of the following:
-        - "busy" - User is busy (486, 600)
-        - "no_answer" - No answer (408, 480, 504, 603, 604)
-        - "other" - Other error types
-        - "unknown" - Could not determine status
-    """
-    sip_info = extract_sip_status_from_error(error)
-    status_code = sip_info.get('sip_status_code')
-    
-    if not status_code:
-        return "unknown"
-    
-    # Busy status codes
-    if status_code in [486, 600]:
-        return "busy"
-    
-    # No answer status codes
-    if status_code in [408, 480, 504, 603, 604]:
-        return "no_answer"
-    
-    # All other status codes
-    return "other"
-
-# --- POST Auth API ---
-async def fetch_new_token():
-    async with aiohttp.ClientSession() as session:
-        async with session.post(
-            url = "https://auth.livspace.com/oauth2/token",
-            headers={"Content-Type": "application/x-www-form-urlencoded"},
-            auth=aiohttp.BasicAuth(os.getenv("CLIENT_ID"), os.getenv("CLIENT_SECRET")),
-            data={"grant_type": "client_credentials"},
-        ) as resp:
-            if resp.status != 200:
-                raise Exception(f"Auth API failed: {resp.status}")
-            data = await resp.json()
-            return data["access_token"] 
-
-# --- Decorator ---
-def with_token_retry(get_api_func):
-    @wraps(get_api_func)
-    async def wrapper(*args, **kwargs):
-        # token = kwargs.get("token")  # current token
-        tried_refresh = False
-        headers = kwargs.get("headers") or {}
-
-        bearer_token = os.getenv("BEARER_TOKEN")
-        if not bearer_token:
-            bearer_token = await fetch_new_token()
-            os.environ["BEARER_TOKEN"] = bearer_token
-            
-        headers = {**headers, "Authorization": f"Bearer {bearer_token}"}
-
-        while True:
-            try:
-                return await get_api_func(*args, headers=headers, **kwargs)
-            except aiohttp.ClientResponseError as e:
-                if e.status in (401, 403) and not tried_refresh:
-                    logger.warning("⚠️ Token expired, refreshing...")
-                    bearer_token = await fetch_new_token()
-                    os.environ["BEARER_TOKEN"] = bearer_token
-                    headers = {**headers, "Authorization": f"Bearer {bearer_token}"}
-                    tried_refresh = True
-                else:
-                    raise
-    return wrapper
-
-# --- GET API Data ---
-@with_token_retry
-async def get_api_data_async(
-    url: str,
-    params: dict = None,
-    headers: dict = None,
-    timeout: int = 10
-):
-    """
-    Sends an asynchronous GET request to the given API endpoint.
-
-    Args:
-        url (str): The API endpoint URL.
-        params (dict, optional): Query parameters for the request.
-        headers (dict, optional): HTTP headers for the request.
-        timeout (int, optional): Timeout in seconds (default: 10).
-
-    Returns:
-        dict or str: JSON response if available, else raw text.
-    """
-    timeout = aiohttp.ClientTimeout(total=timeout)
-    headers = headers or {}
-    async with aiohttp.ClientSession(timeout=timeout) as session:
-        async with session.get(url, params=params, headers=headers) as response:
-            if response.status != 200:
-                # raise error so decorator can catch 401
-                response.raise_for_status()
-
-            try:
-                return await response.json()
-            except aiohttp.ContentTypeError:
-                return await response.text()
 
 
 class LivspaceInboundAgent(Agent):
     def __init__(self,
                  chat_ctx=None,
-                 user_project_details=None,
+                #  user_project_details=None,
                  dial_info=dict[str, Any]):
         self.__name__ = "livekit_livspace_inbound"
         instructions = INSTRUCTIONS
@@ -222,7 +68,7 @@ class LivspaceInboundAgent(Agent):
             chat_ctx=chat_ctx,
         )
         self.dial_info = dial_info
-        self.user_project_details = user_project_details
+        # self.user_project_details = user_project_details
         self.participant: rtc.RemoteParticipant | None = None
 
     async def on_enter(self) -> None:
@@ -241,7 +87,8 @@ class LivspaceInboundAgent(Agent):
         """
         logger.info(f"Getting project details for {identifier} with type {identifier_type}")
 
-        return self.user_project_details
+        # return self.user_project_details
+        return project_details.project_details_1
 
     @function_tool
     async def check_serviceability(self, context: RunContext, pincode: str):
@@ -386,11 +233,12 @@ class LivspaceInboundAgent(Agent):
         return {'success': True, 'error': None}
 
     ##########################################################################################################################################################################################
-
+    # System tools
     @function_tool
     async def language_detection(self, context: RunContext, language_code: str):
         """
-        Change the conversation language when the user expresses a language preference explicitly (Hindi/English)
+        Change the conversation language when the user expresses a language preference explicitly or starts speaking in certain language (Hindi/English)
+
         Call this function when:
         - Direct requests: "Can we speak in Hindi?", "Switch to Hindi", "Let's continue in Hindi"
         - Questions about capability: "Do you speak Hindi?", "क्या आप हिंदी में बात करते हैं?"
@@ -417,8 +265,21 @@ class LivspaceInboundAgent(Agent):
         """
         logger.info(f"Language detection function called with language: {language_code}")
 
-        if self.tts is not None:
-            self.tts.update_options(language=language_code)
+        language_mapping = {
+            "en": {"elevenlabs": "en"},
+            "hi": {"elevenlabs": "hi"}
+        }
+        
+        if language_code not in language_mapping:
+            logger.warning(f"Unsupported language code: {language_code}")
+            return f"Sorry, I don't support the language code '{language_code}'. I can only speak English (en) or Hindi (hi)."
+
+        tts = context.session.tts
+        if tts is not None:
+            language = language_mapping[language_code]["elevenlabs"]
+            tts.update_options(language=language)
+
+        return f"Language switched to {'Hindi' if language_code == 'hi' else 'English'}. I will now respond in this language."
 
     @function_tool
     async def voice_mail_detection(self, context: RunContext):
@@ -535,79 +396,6 @@ async def send_webhook_to_qualif(data: dict, url: str):
                 logger.error(f"Error message: {error_message}")
                 raise Exception(f"Webhook failed with status {response.status}: {error_message}")
 
-# def get_s3_client():
-#     """Get S3 client with credentials from environment variables"""
-#     s3_bucket = os.getenv("S3_RECORDING_BUCKET")
-#     s3_region = os.getenv("S3_RECORDING_REGION")
-#     s3_access_key = os.getenv("AWS_ACCESS_KEY_ID")
-#     s3_secret_key = os.getenv("AWS_SECRET_ACCESS_KEY")
-    
-#     return boto3.client(
-#         "s3",
-#         region_name=s3_region,
-#         aws_access_key_id=s3_access_key,
-#         aws_secret_access_key=s3_secret_key,
-#     )
-
-# def upload_json_to_s3(data: dict, s3_key: str, s3_client=None) -> str:
-#     """Upload JSON data directly to S3 without writing to disk"""
-#     if s3_client is None:
-#         s3_client = get_s3_client()
-    
-#     s3_bucket = os.getenv("S3_RECORDING_BUCKET")
-    
-#     # Convert data to JSON string
-#     json_str = json.dumps(data, indent=2)
-#     json_bytes = json_str.encode('utf-8')
-    
-#     # Upload to S3
-#     s3_client.put_object(
-#         Bucket=s3_bucket,
-#         Key=s3_key,
-#         Body=json_bytes,
-#         ContentType='application/json'
-#     )
-    
-#     logger.info(f"Uploaded JSON to s3://{s3_bucket}/{s3_key}")
-#     return s3_key
-
-# def upload_jsonl_to_s3(data: dict, s3_key: str, s3_client=None) -> str:
-#     """Upload JSONL data directly to S3 without writing to disk"""
-#     if s3_client is None:
-#         s3_client = get_s3_client()
-    
-#     s3_bucket = os.getenv("S3_RECORDING_BUCKET")
-    
-#     # Convert data to JSONL string
-#     jsonl_str = json.dumps(data) + "\n"
-#     jsonl_bytes = jsonl_str.encode('utf-8')
-    
-#     # Upload to S3 (append mode by checking if object exists)
-#     try:
-#         # Check if object exists
-#         s3_client.head_object(Bucket=s3_bucket, Key=s3_key)
-#         # If exists, get current content and append
-#         response = s3_client.get_object(Bucket=s3_bucket, Key=s3_key)
-#         existing_content = response['Body'].read()
-#         new_content = existing_content + jsonl_bytes
-#     except s3_client.exceptions.NoSuchKey:
-#         # If doesn't exist, create new
-#         new_content = jsonl_bytes
-#     except Exception as e:
-#         # Handle any other S3 errors (like 404) by creating new file
-#         logger.warning(f"Could not check existing object {s3_key}, creating new: {e}")
-#         new_content = jsonl_bytes
-    
-#     s3_client.put_object(
-#         Bucket=s3_bucket,
-#         Key=s3_key,
-#         Body=new_content,
-#         ContentType='application/x-ndjson'
-#     )
-    
-#     logger.info(f"Uploaded JSONL to s3://{s3_bucket}/{s3_key}")
-#     return s3_key
-
 
 async def entrypoint(ctx: JobContext):
     """Entrypoint for the agent"""
@@ -628,33 +416,6 @@ async def entrypoint(ctx: JobContext):
     phone_number = dial_info.get("phone_number")
     logger.info(f"sip_trunk_id : {trunk_id}")
     logger.info(f"Phone number: {phone_number}")
-
-    # Helper to write event-specific JSONL files directly to S3 (one JSON object per line)
-    # def write_event_jsonl(data: dict, filename: str = None):
-    #     """Write event to JSONL file directly to S3"""
-    #     if filename is None:
-    #         s3_key = f"livspace_inbound/{ctx.room.name}/session_events_{ctx.room.name}.jsonl"
-    #     else:
-    #         s3_key = f"livspace_inbound/{ctx.room.name}/{filename}_{ctx.room.name}.jsonl"
-        
-    #     try:
-    #         upload_jsonl_to_s3(data, s3_key)
-    #         return s3_key
-    #     except Exception as e:
-    #         logger.error(f"Failed to upload JSONL to S3: {e}")
-    #         return None
-
-    # # Helper to write single JSON files directly to S3 (complete JSON object)
-    # def write_event_json(data: dict, filename: str):
-    #     """Write event to JSON file directly to S3"""
-    #     s3_key = f"livspace_inbound/{ctx.room.name}/{filename}_{ctx.room.name}.json"
-        
-    #     try:
-    #         upload_json_to_s3(data, s3_key)
-    #         return s3_key
-    #     except Exception as e:
-    #         logger.error(f"Failed to upload JSON to S3: {e}")
-    #         return None
 
     req = api.RoomCompositeEgressRequest(
         room_name=ctx.room.name,
@@ -693,8 +454,6 @@ async def entrypoint(ctx: JobContext):
     def _on_agent_false_interruption(ev: AgentFalseInterruptionEvent):
         logger.info("false positive interruption, resuming")
         session.generate_reply(instructions=ev.extra_instructions or NOT_GIVEN, allow_interruptions=True)
-        # filename = asyncio.create_task(write_event_jsonl(ev.model_dump()))
-        # logger.info(f"Agent false interruption: {filename}")
 
     # Metrics collection, to measure pipeline performance
     # For more information, see https://docs.livekit.io/agents/build/metrics/
@@ -704,28 +463,6 @@ async def entrypoint(ctx: JobContext):
     def _on_metrics_collected(ev: MetricsCollectedEvent):
         metrics.log_metrics(ev.metrics)
         usage_collector.collect(ev.metrics)
-        # filename = asyncio.create_task(write_event_jsonl(ev.model_dump()))
-        # logger.info(f"Metrics collected: {filename}")
-
-    # @session.on("speech_created")
-    # def _on_speech_created(ev: SpeechCreatedEvent):
-    #     filename = asyncio.create_task(write_event_jsonl(ev.model_dump()))
-    #     logger.info(f"Speech created: {filename}")
-
-    # @session.on("user_state_changed")
-    # def _on_user_state_changed(ev: UserStateChangedEvent):
-    #     filename = asyncio.create_task(write_event_jsonl(ev.model_dump()))
-    #     logger.info(f"User state changed: {filename}")
-
-    # @session.on("user_input_transcribed")
-    # def _on_user_input_transcribed(ev: UserInputTranscribedEvent):
-    #     filename = asyncio.create_task(write_event_jsonl(ev.model_dump()))
-    #     logger.info(f"User input transcribed: {filename}")
-
-    # @session.on("conversation_item_added")
-    # def _on_conversation_item_added(ev: ConversationItemAddedEvent):
-    #     filename = asyncio.create_task(write_event_jsonl(ev.model_dump()))
-    #     logger.info(f"Conversation item added: {filename}")
 
     @session.on("function_tools_executed")
     def _on_function_tools_executed(ev: FunctionToolsExecutedEvent):
@@ -736,17 +473,6 @@ async def entrypoint(ctx: JobContext):
         url = f"https://qualif.revspot.ai/livekit/events"
         asyncio.create_task(send_webhook_to_qualif(data, url))
         logger.info(f"Function tools executed")
-        # logger.info(f"Function tools executed: {filename}")
-
-    # @session.on("agent_state_changed")
-    # def _on_agent_state_changed(ev: AgentStateChangedEvent):
-    #     filename = asyncio.create_task(write_event_jsonl(ev.model_dump()))
-    #     logger.info(f"Agent state changed: {filename}")
-    
-    # @session.on("error")
-    # def _on_error(ev: ErrorEvent):
-    #     filename = asyncio.create_task(write_event_jsonl(ev.model_dump()))
-    #     logger.info(f"Error: {filename}")
     
     @session.on("close")
     def _on_close(ev: CloseEvent):
@@ -763,20 +489,6 @@ async def entrypoint(ctx: JobContext):
     
 
     async def write_room_events():
-        # try:
-        #     s3_client = get_s3_client()
-            
-        #     # Write final transcript and usage data directly to S3
-        #     transcript_s3_key = asyncio.create_task(write_event_json(session.history.to_dict(), "transcript"))
-        #     summary = usage_collector.get_summary()
-        #     summary_s3_key = asyncio.create_task(write_event_json(summary.__dict__, "summary")) 
-            
-        #     logger.info(f"Uploaded transcript to S3: {transcript_s3_key}")
-        #     logger.info(f"Uploaded summary to S3: {summary_s3_key}")
-            
-        # except Exception as e:
-        #     logger.error(f"Failed to upload events to S3: {e}")
-
             
         try:
             # Get summary safely for webhook
@@ -786,8 +498,7 @@ async def entrypoint(ctx: JobContext):
                 "conversation_id": ctx.room.name,
                 "status": "completed",
                 "room_id": room_id,
-                # "call_started_ts": call_started_ts,
-                "recording_url": f"https://{os.getenv('S3_RECORDING_BUCKET')}.s3.{os.getenv('S3_RECORDING_REGION')}.amazonaws.com/call_recording_{ctx.room.name}.mp4",
+                "recording_url": f"https://recordings.qualif.revspot.ai/call_recording_{ctx.room.name}.mp4",
                 "transcript": session.history.to_dict(),
                 "summary": summary.__dict__ if summary else {}
             }
@@ -803,22 +514,23 @@ async def entrypoint(ctx: JobContext):
 
     ctx.add_shutdown_callback(write_room_events)
 
-    user_project_details = await get_api_data_async(
-        url="https://api.livspace.com/sales/crm/api/v1/projects/search",
-        params={
-            "filters": f"(customer.phone\n=lk={phone_number})",
-            "order_by": "id:desc",
-            "count": 100,
-            "select": "id,stage.display_name,created_at,customer.email,status,city,pincode,property_name"
-        },
-        timeout=10
-    )
+    # user_project_details = await get_api_data_async(
+    #     url="https://api.livspace.com/sales/crm/api/v1/projects/search",
+    #     params={
+    #         "filters": f"(customer.phone\n=lk={phone_number})",
+    #         "order_by": "id:desc",
+    #         "count": 100,
+    #         "select": "id,stage.display_name,created_at,customer.email,status,city,pincode,property_name"
+    #     },
+    #     timeout=10
+    # )
 
 
     lkapi = api.LiveKitAPI()
     res = await lkapi.egress.start_room_composite_egress(req)
 
-    agent = LivspaceInboundAgent(dial_info=dial_info, user_project_details=user_project_details)
+    # agent = LivspaceInboundAgent(dial_info=dial_info, user_project_details=user_project_details)
+    agent = LivspaceInboundAgent(dial_info=dial_info)
 
     # Start the session, which initializes the voice pipeline and warms up the models
     session_started = asyncio.create_task(
@@ -837,7 +549,6 @@ async def entrypoint(ctx: JobContext):
         await ctx.api.sip.create_sip_participant(
             api.CreateSIPParticipantRequest(
                 room_name=ctx.room.name,
-                # sip_trunk_id=os.getenv("SIP_OUTBOUND_TRUNK_ID"),
                 sip_trunk_id=trunk_id,
                 sip_call_to=phone_number,
                 participant_identity=participant_identity,
@@ -853,11 +564,7 @@ async def entrypoint(ctx: JobContext):
         await lkapi.aclose()
         
     except Exception as e:
-        # Identify the call status (busy, no_answer, other, unknown)
         call_status = identify_call_status(e)
-        
-        # # Extract SIP status information for detailed logging
-        # sip_info = extract_sip_status_from_error(e)
         
         # Log the call status and SIP details
         logger.error(f"Failed to create SIP participant: {e}")
@@ -886,9 +593,6 @@ async def entrypoint(ctx: JobContext):
             "error": str(e),
         }
         await send_webhook_to_qualif(data, url)
-
-        # logger.error(f"SIP Status Code: {sip_info.get('sip_status_code', 'Unknown')}")
-        # logger.error(f"SIP Status Message: {sip_info.get('sip_status_message', 'Unknown')}")
         
         # You can now use call_status to decide your action:
         # - "busy": User is busy, you might want to retry later
