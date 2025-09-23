@@ -78,7 +78,7 @@ You can then visit the playground to test out your agent
 
 ## Make Changes to Your Agent
 
-1. **Update Prompt**: Go to ```prompts.py``` and update ```INSTRUCTIONS``` as needed. 
+1. **Update Prompt**: Go to ```instructions.py``` and update ```INSTRUCTIONS``` as needed. 
 2. **Update LLM**: update the required model string and model provider.
 ```console
 llm=google.LLM(model="gemini-2.5-flash-lite")

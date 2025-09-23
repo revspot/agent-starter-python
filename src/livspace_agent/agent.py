@@ -27,7 +27,10 @@ from livekit.plugins import google, elevenlabs, silero, noise_cancellation
 from livekit.plugins.turn_detector.multilingual import MultilingualModel
 from livspace_agent.utils.api_utils import get_api_data_async
 from livspace_agent.pincodes import serviceable_pincodes
-from livspace_agent.prompts import INSTRUCTIONS
+# from livspace_agent.prompts import INSTRUCTIONS
+from livspace_agent.instructions import INSTRUCTIONS
+from livspace_agent.tools_prompt import AVAILABLE_TOOLS
+from livspace_agent.knowledge_base import KNOWLEDGE_BASE
 
 logger = logging.getLogger("livspace-inbound-agent")
 load_dotenv(".env.local")
@@ -36,7 +39,8 @@ class LivspaceInboundAgent(Agent):
     def __init__(self,
                  chat_ctx=None,
                  user_project_details=None):
-        instructions = INSTRUCTIONS
+        # instructions = INSTRUCTIONS
+        instructions=INSTRUCTIONS.replace("{knowledge_base}", KNOWLEDGE_BASE).replace("{availabele_tools}", AVAILABLE_TOOLS)
         super().__init__(
             instructions=instructions,
             stt=elevenlabs.STT(),
@@ -59,7 +63,8 @@ class LivspaceInboundAgent(Agent):
         logger.info(f"User project details: {self.user_project_details}")
 
     async def on_enter(self) -> None:
-        await self.session.generate_reply(instructions=INSTRUCTIONS)
+        # await self.sessions.generate_reply(instructions=INSTRUCTIONS)
+        await self.session.generate_reply(instructions=INSTRUCTIONS.replace("{knowledge_base}", KNOWLEDGE_BASE).replace("{availabele_tools}", AVAILABLE_TOOLS))
 
     @function_tool
     # async def get_project_details(self, context: RunContext, identifier: str = None, identifier_type: str = "phone_number"):
@@ -405,7 +410,7 @@ async def entrypoint(ctx: JobContext):
         },
         timeout=10
     )
-    logger.info(f"User project details: {user_project_details}")
+    logger.info(f"Successfully fetched user_details")
     
     agent = LivspaceInboundAgent(user_project_details=user_project_details)
     await session.start(

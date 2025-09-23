@@ -25,7 +25,7 @@ from livekit import api
 from livekit.agents.llm import function_tool
 from livekit.plugins import cartesia, deepgram, noise_cancellation, openai, silero, google, elevenlabs
 from livekit.plugins.turn_detector.multilingual import MultilingualModel
-from prompts import INSTRUCTIONS
+from instructions import INSTRUCTIONS
 
 logger = logging.getLogger("agent")
 
