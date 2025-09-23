@@ -2,9 +2,7 @@ from __future__ import annotations
 
 import logging
 from typing import Any
-import os
 import asyncio
-import aiohttp
 from dotenv import load_dotenv
 
 from livekit.agents import (
@@ -27,43 +25,12 @@ from livekit.agents import (
 from livekit.agents.llm import function_tool
 from livekit.plugins import google, elevenlabs, silero, noise_cancellation
 from livekit.plugins.turn_detector.multilingual import MultilingualModel
+from livspace_agent.utils.api_utils import get_api_data_async
 from livspace_agent.pincodes import serviceable_pincodes
 from livspace_agent.constants import INSTRUCTIONS
 
 logger = logging.getLogger("livspace-inbound-agent")
 load_dotenv(".env.local")
-
-async def get_api_data_async(
-    url: str,
-    params: dict = None,
-    headers: dict = None,
-    timeout: int = 10
-):
-    """
-    Sends an asynchronous GET request to the given API endpoint.
-
-    Args:
-        url (str): The API endpoint URL.
-        params (dict, optional): Query parameters for the request.
-        headers (dict, optional): HTTP headers for the request.
-        timeout (int, optional): Timeout in seconds (default: 10).
-
-    Returns:
-        dict or str: JSON response if available, else raw text.
-    """
-    timeout = aiohttp.ClientTimeout(total=timeout)
-    try:
-        async with aiohttp.ClientSession(timeout=timeout) as session:
-            async with session.get(url, params=params, headers=headers) as response:
-                response.raise_for_status()
-                try:
-                    return await response.json()
-                except aiohttp.ContentTypeError:
-                    return await response.text()
-    except Exception as e:
-        return {"error": str(e)}
-
-
 
 class LivspaceInboundAgent(Agent):
     def __init__(self,
@@ -298,7 +265,7 @@ class LivspaceInboundAgent(Agent):
         if tts is not None:
             language = language_mapping[language_code]["elevenlabs"]
             tts.update_options(language=language)
-            
+
         return f"Language switched to {'Hindi' if language_code == 'hi' else 'English'}. I will now respond in this language."
 
     @function_tool
@@ -427,7 +394,6 @@ async def entrypoint(ctx: JobContext):
         logger.info(f"Session closed")
         ctx.delete_room()
 
-    bearer_token = os.getenv("BEARER_TOKEN")
     phone_number = "8511117231"
     user_project_details = await get_api_data_async(
         url="https://api.livspace.com/sales/crm/api/v1/projects/search",
@@ -436,9 +402,6 @@ async def entrypoint(ctx: JobContext):
             "order_by": "id:desc",
             "count": 100,
             "select": "id,stage.display_name,created_at,customer.email,status,city,pincode,property_name"
-        },
-        headers={
-            "Authorization": f"Bearer {bearer_token}"
         },
         timeout=10
     )
