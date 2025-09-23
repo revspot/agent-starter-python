@@ -136,7 +136,7 @@ This registers your agent with LiveKit Cloud and assigns a unique ID. The ID is 
 
 In case you are creating a new agent in an already existing repository, update the ```Dockerfile``` first.
 Make sure the right agent.py files are mentioned in the below commands.
-```console
+```dockerfile
 # Pre-download any ML models or files the agent needs
 # This ensures the container is ready to run immediately without downloading
 # dependencies at runtime, which improves startup time and reliability
@@ -146,7 +146,6 @@ RUN uv run src/master-agent/agent.py download-files
 # UV will activate the virtual environment and run the agent.
 # The "start" command tells the worker to connect to LiveKit and begin waiting for jobs.
 CMD ["uv", "run", "src/master-agent/agent.py", "start"]
-
 ```
 
 Next, the CLI uploads your agent code to the LiveKit Cloud build service, builds an image from your Dockerfile, and then deploys it to your LiveKit Cloud project. See the [Builds](https://docs.livekit.io/agents/ops/deployment/builds/) guide for details on the build process, logs, and templates.
@@ -174,9 +173,36 @@ This shows a live tail of the logs for the new instance of your deployed agent.
 ```console
 lk agent logs --id <agent_id>
 ```
-This shows a live tail of the logs for the new instance of your deployed agent for a specific agent based on id.
+This shows a live tail of the logs for the new instance of your deployed agent for a specific agent based on ```agent_id```.
+
+The ```agent_id``` can be found in the **Livekit Cloud** or using **CLI**:
+```console
+lk agent list
+```
 
 ### [Deploying new versions](https://docs.livekit.io/agents/ops/deployment/#deploy)
+To deploy a new version of your agent, first update the ```Dockerfile``` and ```livekit.toml``` file.
+
+```dockerfile
+# Pre-download any ML models or files the agent needs
+# This ensures the container is ready to run immediately without downloading
+# dependencies at runtime, which improves startup time and reliability
+RUN uv run src/master-agent/agent.py download-files
+
+# Run the application using UV
+# UV will activate the virtual environment and run the agent.
+# The "start" command tells the worker to connect to LiveKit and begin waiting for jobs.
+CMD ["uv", "run", "src/master-agent/agent.py", "start"]
+```
+
+```toml
+[project]
+  subdomain = "test-nj8phhn3" #your current project
+
+[agent]
+  id = "<agent_id>"
+```
+
 To deploy a new version of your agent, run the following command:
 ```console
 lk agent deploy
