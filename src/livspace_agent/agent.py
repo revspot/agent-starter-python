@@ -27,7 +27,7 @@ from livekit.plugins import google, elevenlabs, silero, noise_cancellation
 from livekit.plugins.turn_detector.multilingual import MultilingualModel
 from livspace_agent.utils.api_utils import get_api_data_async
 from livspace_agent.pincodes import serviceable_pincodes
-from livspace_agent.constants import INSTRUCTIONS
+from livspace_agent.prompts import INSTRUCTIONS
 
 logger = logging.getLogger("livspace-inbound-agent")
 load_dotenv(".env.local")

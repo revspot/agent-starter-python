@@ -50,39 +50,61 @@ Before your first run, you must download certain models such as [Silero VAD](htt
 uv run python src/agent.py download-files
 ```
 
-Next, run this command to speak to your agent directly in your terminal:
-
-```console
-uv run python src/agent.py console
-```
-
 To run the agent for use with a frontend or telephony, use the `dev` command:
 
 ```console
 uv run python src/agent.py dev
 ```
 
-In production, use the `start` command:
+## Run the Livspace agent
+
+Before your first run, you must download certain models such as [Silero VAD](https://docs.livekit.io/agents/build/turns/vad/) and the [LiveKit turn detector](https://docs.livekit.io/agents/build/turns/turn-detector/):
 
 ```console
-uv run python src/agent.py start
+uv run python src/livspace_agent/agent.py download-files
 ```
 
-## Frontend & Telephony
+To run the agent for use with a frontend or telephony, use the `dev` command:
 
-Get started quickly with our pre-built frontend starter apps, or add telephony support:
+```console
+uv run python src/livspace_agent/agent.py dev
+```
 
-| Platform | Link | Description |
-|----------|----------|-------------|
-| **Web** | [`livekit-examples/agent-starter-react`](https://github.com/livekit-examples/agent-starter-react) | Web voice AI assistant with React & Next.js |
-| **iOS/macOS** | [`livekit-examples/agent-starter-swift`](https://github.com/livekit-examples/agent-starter-swift) | Native iOS, macOS, and visionOS voice AI assistant |
-| **Flutter** | [`livekit-examples/agent-starter-flutter`](https://github.com/livekit-examples/agent-starter-flutter) | Cross-platform voice AI assistant app |
-| **React Native** | [`livekit-examples/voice-assistant-react-native`](https://github.com/livekit-examples/voice-assistant-react-native) | Native mobile app with React Native & Expo |
-| **Android** | [`livekit-examples/agent-starter-android`](https://github.com/livekit-examples/agent-starter-android) | Native Android app with Kotlin & Jetpack Compose |
-| **Web Embed** | [`livekit-examples/agent-starter-embed`](https://github.com/livekit-examples/agent-starter-embed) | Voice AI widget for any website |
-| **Telephony** | [📚 Documentation](https://docs.livekit.io/agents/start/telephony/) | Add inbound or outbound calling to your agent |
+## Playground
 
-For advanced customization, see the [complete frontend guide](https://docs.livekit.io/agents/start/frontend/).
+You can then visit the playground to test out your agent
+
+**Link**: https://agents-playground.livekit.io/#cam=0&mic=1&screen=1&video=0&audio=1&chat=1&theme_color=cyan
+
+## Make Changes to Your Agent
+
+1. **Update Prompt**: Go to ```prompts.py``` and update ```INSTRUCTIONS``` as needed. 
+2. **Update LLM**: update the required model string and model provider.
+```console
+llm=google.LLM(model="gemini-2.5-flash-lite")
+``` 
+3. **Update TTS**:
+```console
+tts=elevenlabs.TTS(
+      model="eleven_flash_v2_5", 
+      voice_id="H8bdWZHK2OgZwTN7ponr",
+      voice_settings=elevenlabs.VoiceSettings(
+          stability=0.5,
+          similarity_boost=0.7,
+          speed=1.10,
+      ),
+      streaming_latency=4
+    ),
+```
+4. **Agent Options**: You can play with a few other agent options to test the agent. You can check if ```preemptive_generation``` helps here.
+```console
+session = AgentSession(
+      vad=ctx.proc.userdata["vad"],
+      false_interruption_timeout=1.0,  # Wait 1 second before resuming
+      resume_false_interruption=True,   # Enable auto-resume
+      # preemptive_generation=True,
+    )
+```
 
 ## Tests and evals
 
@@ -91,20 +113,6 @@ This project includes a complete suite of evals, based on the LiveKit Agents [te
 ```console
 uv run pytest
 ```
-
-## Using this template repo for your own project
-
-Once you've started your own project based on this repo, you should:
-
-1. **Check in your `uv.lock`**: This file is currently untracked for the template, but you should commit it to your repository for reproducible builds and proper configuration management. (The same applies to `livekit.toml`, if you run your agents in LiveKit Cloud)
-
-2. **Remove the git tracking test**: Delete the "Check files not tracked in git" step from `.github/workflows/tests.yml` since you'll now want this file to be tracked. These are just there for development purposes in the template repo itself.
-
-3. **Add your own repository secrets**: You must [add secrets](https://docs.github.com/en/actions/how-tos/writing-workflows/choosing-what-your-workflow-does/using-secrets-in-github-actions) for `OPENAI_API_KEY` or your other LLM provider so that the tests can run in CI.
-
-## Deploying to production
-
-This project is production-ready and includes a working `Dockerfile`. To deploy it to LiveKit Cloud or another environment, see the [deploying to production](https://docs.livekit.io/agents/ops/deployment/) guide.
 
 ## License
 
