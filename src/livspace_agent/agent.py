@@ -47,7 +47,7 @@ class LivspaceInboundAgent(Agent):
             llm=google.LLM(model="gemini-2.5-flash-lite"),
             tts=elevenlabs.TTS(
                 model="eleven_flash_v2_5", 
-                voice_id="H8bdWZHK2OgZwTN7ponr",
+                voice_id="90ipbRoKi4CpHXvKVtl0",
                 voice_settings=elevenlabs.VoiceSettings(
                     stability=0.5,
                     similarity_boost=0.7,
@@ -223,18 +223,18 @@ class LivspaceInboundAgent(Agent):
     @function_tool
     async def language_detection(self, context: RunContext, language_code: str):
         """
-        Change the conversation language when the user expresses a language preference explicitly (Hindi/English) or you detect the user's conversation to be explicitly in Hindi/English
+        Language Detection Tool:
+        Detect the language of the user's conversation and switch the conversation language to the user's preferred language.
+        Change the conversation language when the user expresses a language preference explicitly (Hindi)
         Call this function when:
         - Direct requests: "Can we speak in Hindi?", "Switch to Hindi", "Let's continue in Hindi"
         - Questions about capability: "Do you speak Hindi?", "क्या आप हिंदी में बात करते हैं?"
         - Stated preferences: "I would prefer Hindi", "Hindi would be better for me"
         - Speaks in Hindi: "मुझे नया घर चाहिए"
 
-        Before calling this function, identify the target language with high confidence.
-
         Do not call this function when user mentions the language but doesn't request to speak it.
 
-        Following languages are allowed to be selected: ["en" : English, "hi": "Hindi"]
+        Following languages are allowed to be selected: ["hi": "Hindi"] (Only Hindi is allowed)
         If target language is not in the list, let user know that you can't speak the target language.
         Further responses after tool call should be in the target language.
 
@@ -257,13 +257,12 @@ class LivspaceInboundAgent(Agent):
         logger.info(f"Language detection function called with language: {language_code}")
 
         language_mapping = {
-            "en": {"deepgram": "en-US", "elevenlabs": "en"},
             "hi": {"deepgram": "hi", "elevenlabs": "hi"}
         }
         
         if language_code not in language_mapping:
             logger.warning(f"Unsupported language code: {language_code}")
-            return f"Sorry, I don't support the language code '{language_code}'. I can only speak English (en) or Hindi (hi)."
+            return f"Sorry, I don't support the language code '{language_code}'. I can only speak Hindi (hi)."
         
 
         tts = context.session.tts
@@ -271,7 +270,7 @@ class LivspaceInboundAgent(Agent):
             language = language_mapping[language_code]["elevenlabs"]
             tts.update_options(language=language)
 
-        return f"Language switched to {'Hindi' if language_code == 'hi' else 'English'}. I will now respond in this language."
+        return f"Language switched to {'Hindi' if language_code == 'hi' else 'Hindi'}. I will now respond in this language."
 
     @function_tool
     async def voice_mail_detection(self, context: RunContext):
@@ -372,7 +371,7 @@ async def entrypoint(ctx: JobContext):
     # Set up a voice AI pipeline using OpenAI, Cartesia, Deepgram, and the LiveKit turn detector
     session = AgentSession(
         vad=ctx.proc.userdata["vad"],
-        false_interruption_timeout=1.0,  # Wait 1 second before resuming
+        false_interruption_timeout=0.5,  # Wait 0.5 second before resuming
         resume_false_interruption=True,   # Enable auto-resume
         # preemptive_generation=True,
     )
