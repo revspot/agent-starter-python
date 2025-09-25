@@ -23,7 +23,7 @@ from livekit.agents import (
 )
 
 from livekit.agents.llm import function_tool
-from livekit.plugins import google, elevenlabs, silero, noise_cancellation
+from livekit.plugins import google, elevenlabs, silero, noise_cancellation, sarvam
 from livekit.plugins.turn_detector.multilingual import MultilingualModel
 from livspace_agent.utils.api_utils import get_api_data_async
 from livspace_agent.pincodes import serviceable_pincodes
@@ -43,7 +43,10 @@ class LivspaceInboundAgent(Agent):
         instructions=INSTRUCTIONS.replace("{knowledge_base}", KNOWLEDGE_BASE).replace("{availabele_tools}", AVAILABLE_TOOLS)
         super().__init__(
             instructions=instructions,
-            stt=elevenlabs.STT(),
+            stt=sarvam.STT(
+                language="hi-IN",
+                model="saarika:v2.5"
+            ),
             llm=google.LLM(model="gemini-2.5-flash-lite"),
             tts=elevenlabs.TTS(
                 model="eleven_flash_v2_5", 
