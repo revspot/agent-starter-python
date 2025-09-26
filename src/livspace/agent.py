@@ -39,6 +39,8 @@ from livspace.instructions import INSTRUCTIONS
 from utils.telephony_utils import identify_call_status
 from utils.api_utils import get_api_data_async
 
+import hashlib
+
 logger = logging.getLogger("livspace-inbound-agent")
 load_dotenv(".env.local")
 
@@ -416,6 +418,7 @@ async def entrypoint(ctx: JobContext):
     phone_number = dial_info.get("phone_number")
     logger.info(f"sip_trunk_id : {trunk_id}")
     logger.info(f"Phone number: {phone_number}")
+    s3_file_name_hash = hashlib.sha256(ctx.room.name.encode('utf-8')).hexdigest()
 
     req = api.RoomCompositeEgressRequest(
         room_name=ctx.room.name,
@@ -424,7 +427,7 @@ async def entrypoint(ctx: JobContext):
         file_outputs=[
             api.EncodedFileOutput(
                 file_type=api.EncodedFileType.MP4,
-                filepath=f"call_recording_{ctx.room.name}.mp4",
+                filepath=f"call_recording_{s3_file_name_hash}.mp4",
                 s3=api.S3Upload(
                     access_key=os.getenv("AWS_ACCESS_KEY_ID"),
                     secret=os.getenv("AWS_SECRET_ACCESS_KEY"),
