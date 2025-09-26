@@ -34,7 +34,7 @@ from livekit.plugins import openai, deepgram, google, elevenlabs, silero, noise_
 from livekit.plugins.turn_detector.multilingual import MultilingualModel
 from livspace import project_details
 from livspace.pincodes import serviceable_pincodes
-from livspace.constants import INSTRUCTIONS
+from livspace.instructions import INSTRUCTIONS
 
 from utils.telephony_utils import identify_call_status
 from utils.api_utils import get_api_data_async
@@ -56,7 +56,7 @@ class LivspaceInboundAgent(Agent):
             llm=google.LLM(model="gemini-2.5-flash-lite"),
             tts=elevenlabs.TTS(
                 model="eleven_flash_v2_5", 
-                voice_id="H8bdWZHK2OgZwTN7ponr",
+                voice_id="ZUrEGyu8GFMwnHbvLhv2",
                 voice_settings=elevenlabs.VoiceSettings(
                     stability=0.5,
                     similarity_boost=0.7,
