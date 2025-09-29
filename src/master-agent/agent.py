@@ -5,6 +5,7 @@ import os
 from typing import Any
 import asyncio
 import aiohttp
+import hashlib
 
 import boto3
 from dotenv import load_dotenv
@@ -269,6 +270,8 @@ async def entrypoint(ctx: JobContext):
         # min_interruption_duration=0.5,
         # min_interruption_words=2
     )
+    s3_file_name_hash = hashlib.sha256(ctx.room.name.encode('utf-8')).hexdigest()
+    recording_file_name=f"call_recording_{s3_file_name_hash}.mp4"
 
     req = api.RoomCompositeEgressRequest(
         room_name=ctx.room.name,
@@ -277,7 +280,7 @@ async def entrypoint(ctx: JobContext):
         file_outputs=[
             api.EncodedFileOutput(
                 file_type=api.EncodedFileType.MP4,
-                filepath=f"call_recording_{ctx.room.name}.mp4",
+                filepath=recording_file_name,
                 s3=api.S3Upload(
                     access_key=os.getenv("AWS_ACCESS_KEY_ID"),
                     secret=os.getenv("AWS_SECRET_ACCESS_KEY"),
@@ -334,7 +337,7 @@ async def entrypoint(ctx: JobContext):
                 "conversation_id": ctx.room.name,
                 "status": "completed",
                 "room_id": room_id,
-                "recording_url": f"https://recordings.qualif.revspot.ai/call_recording_{ctx.room.name}.mp4",
+                "recording_url": f"https://recordings.qualif.revspot.ai/{recording_file_name}",
                 "transcript": session.history.to_dict(),
                 "summary": summary.__dict__ if summary else {}
             }
