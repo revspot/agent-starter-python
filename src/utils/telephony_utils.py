@@ -68,6 +68,9 @@ def identify_call_status(error: Exception) -> str:
     # No answer status codes
     if status_code in [408, 480, 504, 603, 604]:
         return "no_answer"
+
+    if status_code in [500, 501, 502, 503]:
+        return "failed"
     
     # All other status codes
     return "other"
