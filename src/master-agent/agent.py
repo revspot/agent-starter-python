@@ -390,12 +390,6 @@ async def entrypoint(ctx: JobContext):
 
         agent.set_participant(participant)
 
-        # Grace period to allow audio track to publish before starting egress
-        try:
-            await asyncio.sleep(1)
-        except Exception:
-            pass
-
         try:
             res = await lkapi.egress.start_room_composite_egress(req)
             egress_id = getattr(res, "egress_id", None)
