@@ -273,6 +273,7 @@ async def entrypoint(ctx: JobContext):
     s3_file_name_hash = hashlib.sha256(ctx.room.name.encode('utf-8')).hexdigest()
     recording_file_name=f"call_recording_{s3_file_name_hash}.mp4"
 
+    # Prepare egress request, but start only after audio is present
     req = api.RoomCompositeEgressRequest(
         room_name=ctx.room.name,
         layout="grid",
@@ -353,9 +354,9 @@ async def entrypoint(ctx: JobContext):
 
     ctx.add_shutdown_callback(write_room_events)
 
-
+    # We'll start egress later, after remote audio is present
     lkapi = api.LiveKitAPI()
-    res = await lkapi.egress.start_room_composite_egress(req)
+    egress_id: str | None = None
 
     agent = MasterOutboundAgent(dial_info=dial_info, enter_instructions=enter_instructions, instructions=instructions)
 
@@ -388,6 +389,45 @@ async def entrypoint(ctx: JobContext):
         logger.info(f"participant joined: {participant.identity}")
 
         agent.set_participant(participant)
+
+        # Grace period to allow audio track to publish before starting egress
+        try:
+            await asyncio.sleep(1)
+        except Exception:
+            pass
+
+        try:
+            res = await lkapi.egress.start_room_composite_egress(req)
+            egress_id = getattr(res, "egress_id", None)
+            logger.info(f"Started egress: {egress_id}")
+        except Exception as e:
+            logger.error(f"Failed to start egress: {e}")
+
+        # Watchdog to ensure egress is stopped if the session ends but egress hangs
+        async def _egress_watchdog():
+            try:
+                # Fixed timeout watchdog: wait 5 minutes then attempt a best-effort stop
+                await asyncio.sleep(600)
+                if egress_id:
+                    try:
+                        await lkapi.egress.stop_egress(api.StopEgressRequest(egress_id=egress_id))
+                        logger.info(f"Watchdog stop issued for egress after timeout: {egress_id}")
+                    except Exception as stop_err:
+                        logger.warning(f"Watchdog stop failed: {stop_err}")
+            except Exception as err:
+                logger.warning(f"Egress watchdog error: {err}")
+
+        asyncio.create_task(_egress_watchdog())
+
+        async def _stop_egress_on_close():
+            if egress_id:
+                try:
+                    await lkapi.egress.stop_egress(api.StopEgressRequest(egress_id=egress_id))
+                    logger.info(f"Stopped egress on close: {egress_id}")
+                except Exception as e:
+                    logger.warning(f"Failed to stop egress on close: {e}")
+
+        ctx.add_shutdown_callback(_stop_egress_on_close)
         await lkapi.aclose()
         
     except Exception as e:
