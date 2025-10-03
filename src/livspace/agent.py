@@ -186,8 +186,9 @@ class LivspaceInboundAgent(Agent):
             project_id: The ID of the project to create a support ticket for.
             issue_category: The category of the issue to create a support ticket for,(e.g., 'Status Update', 'Payment Query', 'Delay Concern').
             summary: The summary of the issue to create a support ticket for.
-            callback_requested: Whether the customer wants to be called back.
-            preferred_time: The preferred time for the callback.
+            title: The title of the support ticket to create a support ticket for.
+            user_email: The email of the user to create a support ticket for.
+            user_name: The name of the user to create a support ticket for.
 
         Returns:
             A dictionary with the following keys:
@@ -196,7 +197,7 @@ class LivspaceInboundAgent(Agent):
             - error: The error message if the support ticket was not created successfully, None if successful.
         """
         
-        logger.info(f"Creating support ticket for {project_id} with issue category {issue_category} and summary {summary} and callback requested {callback_requested} and preferred time {preferred_time}")
+        logger.info(f"Creating support ticket for {project_id} with issue category {issue_category} and summary {summary}")
 
         response = await get_api_data_async(
             url="https://ls-proxy.revspot.ai/fd/tickets",
