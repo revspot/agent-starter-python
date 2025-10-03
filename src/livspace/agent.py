@@ -178,7 +178,7 @@ class LivspaceInboundAgent(Agent):
         return {'success': True, 'appointment_id': '123456', 'error': None}
 
     @function_tool
-    async def create_support_ticket(self, context: RunContext, project_id: str, issue_category: str, summary: str, callback_requested: bool, preferred_time: str, title: str, user_email: str, user_name: str):
+    async def create_support_ticket(self, context: RunContext, project_id: str, issue_category: str, summary: str, title: str, user_email: str, user_name: str):
         """
         Creates a standard support ticket for an existing project query.
         
@@ -203,7 +203,7 @@ class LivspaceInboundAgent(Agent):
             method="POST",
             data={
                 "title": title,
-                "description": f"{issue_category}: {summary}. Callback requested: {callback_requested}. Preferred time: {preferred_time}.",
+                "description": f"{issue_category}: {summary}.",
                 "tags": ["livspace-revspot-bot"],
                 "customerData": {
                     "email": user_email,
