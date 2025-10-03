@@ -147,33 +147,59 @@ async def entrypoint(ctx: JobContext):
     }
 
     # Set up a voice AI pipeline using OpenAI, Cartesia, Deepgram, and the LiveKit turn detector
+    # session = AgentSession(
+    # #     # A Large Language Model (LLM) is your agent's brain, processing user input and generating a response
+    # #     # See all providers at https://docs.livekit.io/agents/integrations/llm/
+    # #     # llm=openai.LLM(model="gpt-4o-mini"),
+    #     llm=google.LLM(model="gemini-2.5-flash-lite"),
+    # #     # Speech-to-text (STT) is your agent's ears, turning the user's speech into text that the LLM can understand
+    # #     # See all providers at https://docs.livekit.io/agents/integrations/stt/
+    #     stt=elevenlabs.STT(),
+    # #     # Text-to-speech (TTS) is your agent's voice, turning the LLM's text into speech that the user can hear
+    # #     # See all providers at https://docs.livekit.io/agents/integrations/tts/
+    #     tts=elevenlabs.TTS(
+    #             model="eleven_flash_v2_5", 
+    #             voice_id="H8bdWZHK2OgZwTN7ponr",
+    #             voice_settings=elevenlabs.VoiceSettings(
+    #                 stability=0.5,
+    #                 similarity_boost=0.7,
+    #                 speed=1.10,
+    #             ),
+    #             streaming_latency=4
+    #             ),
+    # #     # VAD and turn detection are used to determine when the user is speaking and when the agent should respond
+    # #     # See more at https://docs.livekit.io/agents/build/turns
+    #     turn_detection=MultilingualModel(),
+    #     vad=ctx.proc.userdata["vad"],
+    # #     # allow the LLM to generate a response while waiting for the end of turn
+    # #     # See more at https://docs.livekit.io/agents/build/audio/#preemptive-generation
+    #     preemptive_generation=True,
+    # )
+
     session = AgentSession(
-    #     # A Large Language Model (LLM) is your agent's brain, processing user input and generating a response
-    #     # See all providers at https://docs.livekit.io/agents/integrations/llm/
-    #     # llm=openai.LLM(model="gpt-4o-mini"),
-        llm=google.LLM(model="gemini-2.5-flash-lite"),
-    #     # Speech-to-text (STT) is your agent's ears, turning the user's speech into text that the LLM can understand
-    #     # See all providers at https://docs.livekit.io/agents/integrations/stt/
-        stt=elevenlabs.STT(),
-    #     # Text-to-speech (TTS) is your agent's voice, turning the LLM's text into speech that the user can hear
-    #     # See all providers at https://docs.livekit.io/agents/integrations/tts/
-        tts=elevenlabs.TTS(
-                model="eleven_flash_v2_5", 
-                voice_id="H8bdWZHK2OgZwTN7ponr",
-                voice_settings=elevenlabs.VoiceSettings(
-                    stability=0.5,
-                    similarity_boost=0.7,
-                    speed=1.10,
-                ),
-                streaming_latency=4
-                ),
-    #     # VAD and turn detection are used to determine when the user is speaking and when the agent should respond
-    #     # See more at https://docs.livekit.io/agents/build/turns
-        turn_detection=MultilingualModel(),
-        vad=ctx.proc.userdata["vad"],
-    #     # allow the LLM to generate a response while waiting for the end of turn
-    #     # See more at https://docs.livekit.io/agents/build/audio/#preemptive-generation
-        preemptive_generation=True,
+        llm=openai.realtime.RealtimeModel(
+            model="gpt-4o-realtime-preview",
+            modalities=["audio"],
+            voice="marin",
+            input_audio_transcription=openai.realtime.InputAudioTranscription(
+                model="gpt-4o-realtime-preview",
+            ),
+            input_audio_noise_reduction=openai.realtime.InputAudioNoiseReduction(
+                model="gpt-4o-realtime-preview",
+            ),
+            turn_detection=openai.realtime.TurnDetection(
+                model="gpt-4o-realtime-preview",
+            ),
+            temperature=0.8,
+            speed=1.10,
+            capabilities=openai.realtime.RealtimeCapabilities(
+                message_truncation=True,
+                turn_detection=True,
+                user_transcription=True,
+                auto_tool_reply_generation=True,
+                audio_output=True,
+            ),
+        ),
     )
 
     # sometimes background noise could interrupt the agent session, these are considered false positive interruptions
