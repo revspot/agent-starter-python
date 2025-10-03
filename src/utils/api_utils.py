@@ -12,7 +12,7 @@ load_dotenv(".env.local")
 async def fetch_new_token():
     async with aiohttp.ClientSession() as session:
         async with session.post(
-            url = "https://auth.livspace.com/oauth2/token",
+            url = "https://ls-proxy.revspot.ai/canvas/oauth2/token",
             headers={"Content-Type": "application/x-www-form-urlencoded"},
             auth=aiohttp.BasicAuth(os.getenv("CLIENT_ID"), os.getenv("CLIENT_SECRET")),
             data={"grant_type": "client_credentials"},

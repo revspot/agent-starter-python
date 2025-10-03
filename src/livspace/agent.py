@@ -48,7 +48,7 @@ load_dotenv(".env.local")
 class LivspaceInboundAgent(Agent):
     def __init__(self,
                  chat_ctx=None,
-                #  user_project_details=None,
+                 user_project_details=None,
                  dial_info=dict[str, Any]):
         self.__name__ = "livekit_livspace_inbound"
         instructions = INSTRUCTIONS
@@ -70,7 +70,7 @@ class LivspaceInboundAgent(Agent):
             chat_ctx=chat_ctx,
         )
         self.dial_info = dial_info
-        # self.user_project_details = user_project_details
+        self.user_project_details = user_project_details
         self.participant: rtc.RemoteParticipant | None = None
 
     async def on_enter(self) -> None:
@@ -89,8 +89,8 @@ class LivspaceInboundAgent(Agent):
         """
         logger.info(f"Getting project details for {identifier} with type {identifier_type}")
 
-        # return self.user_project_details
-        return project_details.project_details_1
+        return self.user_project_details
+        # return project_details.project_details_1
 
     @function_tool
     async def check_serviceability(self, context: RunContext, pincode: str):
@@ -178,7 +178,7 @@ class LivspaceInboundAgent(Agent):
         return {'success': True, 'appointment_id': '123456', 'error': None}
 
     @function_tool
-    async def create_support_ticket(self, context: RunContext, project_id: str, issue_category: str, summary: str, callback_requested: bool, preferred_time: str):
+    async def create_support_ticket(self, context: RunContext, project_id: str, issue_category: str, summary: str, callback_requested: bool, preferred_time: str, title: str, user_email: str, user_name: str):
         """
         Creates a standard support ticket for an existing project query.
         
@@ -195,8 +195,25 @@ class LivspaceInboundAgent(Agent):
             - support_ticket_id: The ID of the support ticket if created successfully, None otherwise.
             - error: The error message if the support ticket was not created successfully, None if successful.
         """
+        
+        logger.info(f"Creating support ticket for {project_id} with issue category {issue_category} and summary {summary} and callback requested {callback_requested} and preferred time {preferred_time}")
 
-        return {'success': True, 'support_ticket_id': '123456', 'error': None}
+        response = await get_api_data_async(
+            url="https://ls-proxy.revspot.ai/fd/tickets",
+            method="POST",
+            data={
+                "title": title,
+                "description": f"{issue_category}: {summary}. Callback requested: {callback_requested}. Preferred time: {preferred_time}.",
+                "tags": ["livspace-revspot-bot"],
+                "customerData": {
+                    "email": user_email,
+                    "name": user_name
+                },
+                "projectId": project_id
+            }
+        )
+
+        return {'success': True, 'support_ticket_id': response['id'], 'error': None}
 
     @function_tool
     async def create_escalation_ticket(self, context: RunContext, project_id: str, summary: str, customer_sentiment: str):
@@ -421,6 +438,7 @@ async def entrypoint(ctx: JobContext):
     s3_file_name_hash = hashlib.sha256(ctx.room.name.encode('utf-8')).hexdigest()
     recording_file_name=f"call_recording_{s3_file_name_hash}.mp4"
 
+    # Prepare egress request, but start only after audio is present
     req = api.RoomCompositeEgressRequest(
         room_name=ctx.room.name,
         layout="grid",
@@ -530,11 +548,23 @@ async def entrypoint(ctx: JobContext):
     # )
 
 
-    lkapi = api.LiveKitAPI()
-    res = await lkapi.egress.start_room_composite_egress(req)
+    user_project_details = await get_api_data_async(
+    url="https://ls-proxy.revspot.ai/canvas/projects/search",
+    params={
+        "filters": f"(customer.phone\n=lk={phone_number})",
+        "order_by": "id:desc",
+        "count": 100,
+        "select": "id,stage.display_name,created_at,customer.email,status,city,pincode,property_name"
+    },
+    timeout=10
+  )
 
-    # agent = LivspaceInboundAgent(dial_info=dial_info, user_project_details=user_project_details)
-    agent = LivspaceInboundAgent(dial_info=dial_info)
+
+    lkapi = api.LiveKitAPI()
+    egress_id: str | None = None
+
+    agent = LivspaceInboundAgent(dial_info=dial_info, user_project_details=user_project_details)
+    # agent = LivspaceInboundAgent(dial_info=dial_info)
 
     # Start the session, which initializes the voice pipeline and warms up the models
     session_started = asyncio.create_task(
@@ -565,6 +595,39 @@ async def entrypoint(ctx: JobContext):
         logger.info(f"participant joined: {participant.identity}")
 
         agent.set_participant(participant)
+        
+        try:
+            res = await lkapi.egress.start_room_composite_egress(req)
+            egress_id = getattr(res, "egress_id", None)
+            logger.info(f"Started egress: {egress_id}")
+        except Exception as e:
+            logger.error(f"Failed to start egress: {e}")
+
+        # Watchdog to ensure egress is stopped if the session ends but egress hangs
+        async def _egress_watchdog():
+            try:
+                # Fixed timeout watchdog: wait 5 minutes then attempt a best-effort stop
+                await asyncio.sleep(600)
+                if egress_id:
+                    try:
+                        await lkapi.egress.stop_egress(api.StopEgressRequest(egress_id=egress_id))
+                        logger.info(f"Watchdog stop issued for egress after timeout: {egress_id}")
+                    except Exception as stop_err:
+                        logger.warning(f"Watchdog stop failed: {stop_err}")
+            except Exception as err:
+                logger.warning(f"Egress watchdog error: {err}")
+
+        asyncio.create_task(_egress_watchdog())
+
+        async def _stop_egress_on_close():
+            if egress_id:
+                try:
+                    await lkapi.egress.stop_egress(api.StopEgressRequest(egress_id=egress_id))
+                    logger.info(f"Stopped egress on close: {egress_id}")
+                except Exception as e:
+                    logger.warning(f"Failed to stop egress on close: {e}")
+
+        ctx.add_shutdown_callback(_stop_egress_on_close)
         await lkapi.aclose()
         
     except Exception as e:
