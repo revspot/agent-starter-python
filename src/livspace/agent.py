@@ -433,6 +433,7 @@ async def entrypoint(ctx: JobContext):
     trunk_id = dial_info.get("trunk_id")
     participant_identity = dial_info.get("phone_number")
     phone_number = dial_info.get("phone_number")
+    clean_phone_number = phone_number.replace("+91", "")
     logger.info(f"sip_trunk_id : {trunk_id}")
     logger.info(f"Phone number: {phone_number}")
     s3_file_name_hash = hashlib.sha256(ctx.room.name.encode('utf-8')).hexdigest()
@@ -551,7 +552,7 @@ async def entrypoint(ctx: JobContext):
     user_project_details = await get_api_data_async(
     url="https://ls-proxy.revspot.ai/canvas/projects/search",
     params={
-        "filters": f"(customer.phone\n=lk={phone_number})",
+        "filters": f"(customer.phone\n=lk={clean_phone_number})",
         "order_by": "id:desc",
         "count": 100,
         "select": "id,stage.display_name,created_at,customer.email,status,city,pincode,property_name"
@@ -595,7 +596,7 @@ async def entrypoint(ctx: JobContext):
         logger.info(f"participant joined: {participant.identity}")
 
         agent.set_participant(participant)
-        
+
         try:
             res = await lkapi.egress.start_room_composite_egress(req)
             egress_id = getattr(res, "egress_id", None)
