@@ -35,7 +35,8 @@ Before we begin, would you like to continue in Hindi or English?"
 
 → If Hindi requested → language_detection(language_code='hi')
 → If English or default → continue in English
-⚠️ Do not switch back and forth unless user clearly says so.
+⚠️ Do not switch back and forth between languages unless user clearly requests.
+⚠️ In case the user speaks in Hinglish, keep talking in the language chosen by the user the first time.
 
 Next (after language):
 
