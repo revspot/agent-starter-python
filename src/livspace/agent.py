@@ -200,7 +200,6 @@ class LivspaceInboundAgent(Agent):
 
         response = await get_api_data_async(
             url="https://ls-proxy.revspot.ai/fd/tickets",
-            method="POST",
             data={
                 "title": title,
                 "description": f"{issue_category}: {summary}.",
