@@ -42,7 +42,7 @@ class LivspaceLanguageSwitchAgent(Agent):
             Donot try to extend the conversation for a long duration. Try to keep the conversation short and to the point.
             You are curious, friendly, and have a sense of humor.""",
             stt=elevenlabs.STT(
-                language="en"
+                language_code="en"
             ),
             llm=google.LLM(model="gemini-2.5-flash-lite"),
             tts=elevenlabs.TTS(

@@ -27,7 +27,7 @@ class LivspaceInboundEnglishAgent(Agent):
         super().__init__(
             instructions=INSTRUCTIONS,
             stt=elevenlabs.STT(
-                language="en"
+                language_code="en"
             ),
             llm=google.LLM(model="gemini-2.5-flash-lite"),
             tts=elevenlabs.TTS(
