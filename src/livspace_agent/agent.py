@@ -415,6 +415,8 @@ async def entrypoint(ctx: JobContext):
     logger.info(f"Successfully fetched user_details")
     
     agent = LivspaceInboundAgent(user_project_details=user_project_details)
+
+    await ctx.connect()
     await session.start(
         agent=agent,
         room=ctx.room,

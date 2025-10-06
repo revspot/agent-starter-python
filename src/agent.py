@@ -14,6 +14,7 @@ from livekit.agents import (
     JobContext,
     JobProcess,
     MetricsCollectedEvent,
+    CloseEvent,
     RoomInputOptions,
     RunContext,
     WorkerOptions,
@@ -23,7 +24,7 @@ from livekit.agents import (
 )
 from livekit import api
 from livekit.agents.llm import function_tool
-from livekit.plugins import cartesia, deepgram, noise_cancellation, openai, silero, google, elevenlabs
+from livekit.plugins import deepgram, noise_cancellation, openai, silero, google, elevenlabs
 from livekit.plugins.turn_detector.multilingual import MultilingualModel
 from instructions import INSTRUCTIONS
 
@@ -49,7 +50,8 @@ class Assistant(Agent):
         greeting_time = "morning"
         salutation = "Mr."
         customer_name = "Vivek"
-        await self.session.generate_reply(instructions=f"Good {greeting_time}, am I speaking with {salutation} {customer_name}?")
+        # logger.info("on_enter function called")
+        await self.session.say(f"Good {greeting_time}, am I speaking with {salutation} {customer_name}?")
 
     @function_tool
     async def voice_mail_detection(self, context: RunContext):
@@ -147,67 +149,51 @@ async def entrypoint(ctx: JobContext):
     }
 
     # Set up a voice AI pipeline using OpenAI, Cartesia, Deepgram, and the LiveKit turn detector
-    # session = AgentSession(
-    # #     # A Large Language Model (LLM) is your agent's brain, processing user input and generating a response
-    # #     # See all providers at https://docs.livekit.io/agents/integrations/llm/
-    # #     # llm=openai.LLM(model="gpt-4o-mini"),
-    #     llm=google.LLM(model="gemini-2.5-flash-lite"),
-    # #     # Speech-to-text (STT) is your agent's ears, turning the user's speech into text that the LLM can understand
-    # #     # See all providers at https://docs.livekit.io/agents/integrations/stt/
-    #     stt=elevenlabs.STT(),
-    # #     # Text-to-speech (TTS) is your agent's voice, turning the LLM's text into speech that the user can hear
-    # #     # See all providers at https://docs.livekit.io/agents/integrations/tts/
-    #     tts=elevenlabs.TTS(
-    #             model="eleven_flash_v2_5", 
-    #             voice_id="H8bdWZHK2OgZwTN7ponr",
-    #             voice_settings=elevenlabs.VoiceSettings(
-    #                 stability=0.5,
-    #                 similarity_boost=0.7,
-    #                 speed=1.10,
-    #             ),
-    #             streaming_latency=4
-    #             ),
-    # #     # VAD and turn detection are used to determine when the user is speaking and when the agent should respond
-    # #     # See more at https://docs.livekit.io/agents/build/turns
-    #     turn_detection=MultilingualModel(),
-    #     vad=ctx.proc.userdata["vad"],
-    # #     # allow the LLM to generate a response while waiting for the end of turn
-    # #     # See more at https://docs.livekit.io/agents/build/audio/#preemptive-generation
-    #     preemptive_generation=True,
-    # )
-
     session = AgentSession(
-        llm=openai.realtime.RealtimeModel(
-            model="gpt-4o-realtime-preview",
-            modalities=["audio"],
-            voice="marin",
-            input_audio_transcription=openai.realtime.InputAudioTranscription(
-                model="gpt-4o-realtime-preview",
-            ),
-            input_audio_noise_reduction=openai.realtime.InputAudioNoiseReduction(
-                model="gpt-4o-realtime-preview",
-            ),
-            turn_detection=openai.realtime.TurnDetection(
-                model="gpt-4o-realtime-preview",
-            ),
-            temperature=0.8,
-            speed=1.10,
-            capabilities=openai.realtime.RealtimeCapabilities(
-                message_truncation=True,
-                turn_detection=True,
-                user_transcription=True,
-                auto_tool_reply_generation=True,
-                audio_output=True,
-            ),
-        ),
+    #     # A Large Language Model (LLM) is your agent's brain, processing user input and generating a response
+    #     # See all providers at https://docs.livekit.io/agents/integrations/llm/
+    #     # llm=openai.LLM(model="gpt-4o-mini"),
+        llm=google.LLM(model="gemini-2.5-flash-lite"),
+    #     # Speech-to-text (STT) is your agent's ears, turning the user's speech into text that the LLM can understand
+    #     # See all providers at https://docs.livekit.io/agents/integrations/stt/
+        stt=elevenlabs.STT(),
+    #     # Text-to-speech (TTS) is your agent's voice, turning the LLM's text into speech that the user can hear
+    #     # See all providers at https://docs.livekit.io/agents/integrations/tts/
+        tts=elevenlabs.TTS(
+                model="eleven_flash_v2_5", 
+                voice_id="H8bdWZHK2OgZwTN7ponr",
+                voice_settings=elevenlabs.VoiceSettings(
+                    stability=0.5,
+                    similarity_boost=0.7,
+                    speed=1.12,
+                ),
+                streaming_latency=4
+                ),
+    #     # VAD and turn detection are used to determine when the user is speaking and when the agent should respond
+    #     # See more at https://docs.livekit.io/agents/build/turns
+        turn_detection=MultilingualModel(),
+        vad=ctx.proc.userdata["vad"],
+    #     # allow the LLM to generate a response while waiting for the end of turn
+    #     # See more at https://docs.livekit.io/agents/build/audio/#preemptive-generation
+        preemptive_generation=True,
     )
+
+    # session = AgentSession(
+    #     llm=openai.realtime.RealtimeModel(
+    #         model="gpt-4o-realtime-preview",
+    #         # modalities=["audio, 'text"],
+    #         voice="marin",
+    #         temperature=0.8,
+    #         speed=1.10
+    #     ),
+    # )
 
     # sometimes background noise could interrupt the agent session, these are considered false positive interruptions
     # when it's detected, you may resume the agent's speech
-    @session.on("agent_false_interruption")
-    def _on_agent_false_interruption(ev: AgentFalseInterruptionEvent):
-        logger.info("false positive interruption, resuming")
-        session.generate_reply(instructions=ev.extra_instructions or NOT_GIVEN)
+    # @session.on("agent_false_interruption")
+    # def _on_agent_false_interruption(ev: AgentFalseInterruptionEvent):
+    #     logger.info("false positive interruption, resuming")
+    #     session.generate_reply(instructions=ev.extra_instructions or NOT_GIVEN)
 
     # Metrics collection, to measure pipeline performance
     # For more information, see https://docs.livekit.io/agents/build/metrics/
@@ -218,6 +204,11 @@ async def entrypoint(ctx: JobContext):
         metrics.log_metrics(ev.metrics)
         usage_collector.collect(ev.metrics)
 
+    @session.on("close")
+    def _on_close(ev: CloseEvent):
+        logger.info(f"Session closed")
+        ctx.delete_room()
+
 
     # # Add a virtual avatar to the session, if desired
     # # For other providers, see https://docs.livekit.io/agents/integrations/avatar/
@@ -226,6 +217,9 @@ async def entrypoint(ctx: JobContext):
     # )
     # # Start the avatar and wait for it to join
     # await avatar.start(session, room=ctx.room)
+
+    #Join the room and connect to the user
+    await ctx.connect()
 
     # Start the session, which initializes the voice pipeline and warms up the models
     await session.start(
@@ -238,10 +232,6 @@ async def entrypoint(ctx: JobContext):
             noise_cancellation=noise_cancellation.BVC(),
         ),
     )
-
-    # Join the room and connect to the user
-    await ctx.connect()
-
 
 if __name__ == "__main__":
     cli.run_app(WorkerOptions(entrypoint_fnc=entrypoint, prewarm_fnc=prewarm))
