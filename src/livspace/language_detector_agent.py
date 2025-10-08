@@ -2,14 +2,13 @@ from __future__ import annotations
 
 import logging
 import os
-from typing import Any
+import hashlib
 import asyncio
 import aiohttp
-from functools import wraps
-from typing import Dict, Any
-
-from dotenv import load_dotenv
 import json
+from dotenv import load_dotenv
+from typing import Any
+
 from livekit.agents import (
     NOT_GIVEN,
     Agent,
@@ -26,39 +25,37 @@ from livekit.agents import (
     cli,
     metrics
 )
-
 from livekit import api, rtc
-
 from livekit.agents.llm import function_tool
-from livekit.plugins import openai, deepgram, google, elevenlabs, silero, noise_cancellation
+from livekit.plugins import google, elevenlabs, silero, noise_cancellation
 from livekit.plugins.turn_detector.multilingual import MultilingualModel
-from livspace import project_details
-from livspace.pincodes import serviceable_pincodes
-from livspace.instructions import INSTRUCTIONS
 
-from utils.telephony_utils import identify_call_status
 from utils.api_utils import get_api_data_async
+from utils.telephony_utils import identify_call_status
+from livspace.englishAgent import LivspaceInboundEnglishAgent
+from livspace.hindiAgent import LivspaceInboundHindiAgent
 
-import hashlib
-
-logger = logging.getLogger("livspace-inbound-agent")
+logger = logging.getLogger("livspace-language-detector-agent")
 load_dotenv(".env.local")
 
-
-class LivspaceInboundAgent(Agent):
+class LivspaceLanguageSwitchAgent(Agent):
     def __init__(self,
-                 chat_ctx=None,
-                 user_project_details=None,
-                 dial_info: dict[str, Any]=None):
-        self.__name__ = "livekit_livspace_inbound"
-        instructions = INSTRUCTIONS
+                chat_ctx=None,
+                user_project_details=None,
+                dial_info: dict[str, Any]=None
+                ):
         super().__init__(
-            instructions=instructions,
-            stt=elevenlabs.STT(),
+            instructions="""You are a helpful voice AI assistant.
+            Your job is to detect the language of the user's conversation and switch the conversation language to the user's preferred language.
+            Donot try to extend the conversation for a long duration. Try to keep the conversation short and to the point.
+            You are curious, friendly, and have a sense of humor.""",
+            stt=elevenlabs.STT(
+                language_code="en"
+            ),
             llm=google.LLM(model="gemini-2.5-flash-lite"),
             tts=elevenlabs.TTS(
                 model="eleven_flash_v2_5", 
-                voice_id="ZUrEGyu8GFMwnHbvLhv2",
+                voice_id="H8bdWZHK2OgZwTN7ponr",
                 voice_settings=elevenlabs.VoiceSettings(
                     stability=0.5,
                     similarity_boost=0.7,
@@ -69,207 +66,29 @@ class LivspaceInboundAgent(Agent):
             turn_detection=MultilingualModel(),
             chat_ctx=chat_ctx,
         )
-        self.dial_info = dial_info
         self.user_project_details = user_project_details
-        self.participant: rtc.RemoteParticipant | None = None
-
+        self.dial_info = dial_info
+        logger.info(f"User project details: {self.user_project_details}")
     async def on_enter(self) -> None:
-        await self.session.generate_reply(instructions=INSTRUCTIONS)
-
-    @function_tool
-    async def get_project_details(self, context: RunContext, identifier: str, identifier_type: str):
-        """ Retrieves details for an existing customer's project using either their Project ID or registered mobile number (phone number).
-        
-        Args:
-            identifier: The Project ID (e.g., "BLR12345") or phone number (e.g., "9876543210").
-            identifier_type: Must be either 'project_id' or 'phone_number'.
-
-        Returns:
-            A dictionary with the details of the project.
-        """
-        logger.info(f"Getting project details for {identifier} with type {identifier_type}")
-
-        return self.user_project_details
-        # return project_details.project_details_1
-
-    @function_tool
-    async def check_serviceability(self, context: RunContext, pincode: str):
-        """
-        Checks if Livspace provides services for a given pin code.
-
-        Args:
-            pincode: The 6-digit pin code to check serviceability for (e.g. "560034").
-
-        Returns:
-            A dictionary with the following keys:
-            - serviceable: True if Livspace provides services for the given pin code, False otherwise.
-            - city: The city that Livspace provides services for the given pin code.
-            - error: The error message if the pin code is invalid.
-        """
-        logger.info(f"Checking serviceability for {pincode}")
-        if len(pincode) != 6:
-            return {'serviceable': False, 'error': 'Invalid pin code. Please enter a valid 6-digit pin code.'}
-
-        # serviceable_pincodes = ["560001", "560103", "560037", "560078"]
-        for city, pincodes in serviceable_pincodes.items():
-            if int(pincode) in pincodes:
-                return {'serviceable': True, 'city': city}
-        return {'serviceable': False}
-        
-    @function_tool
-    async def get_minimum_budget(self, context: RunContext, city: str, project_type: str):
-        """
-        Fetches the minimum budget requirement for a specific city and project type.
-
-        Args:
-            city: The city to get the minimum budget for (e.g. "Bangalore").
-            project_type: The type of project to get the minimum budget for, must be either ("new_build" or "renovation").
-
-        Returns:
-            A dictionary with the following keys:
-            - minimum_budget: The minimum budget requirement for the given city and project type.
-            - error: The error message if the city or project type is invalid, None if successful.
-        """
-
-        return {'minimum_budget': 100000, 'error': None}
-
-    @function_tool
-    async def create_lead_ticket(self, context: RunContext, name: str, phone: str, email: str, city: str, pincode: str, project_type: str, scope_summary: str, budget: int):
-        """
-        Creates a new lead ticket in the CRM for a qualified potential customer.
-
-        Args:
-            name: The name of the customer (e.g. "John Doe").
-            phone: The phone number of the customer (e.g. "9876543210").
-            email: The email of the customer (e.g. "john.doe@example.com").
-            city: The city of the customer (e.g. "Bangalore").
-            pincode: The pin code of the customer (e.g. "560034").
-            project_type: The type of project to create a lead ticket for, must be either ("new_build" or "renovation").
-            scope_summary: The scope of the project (e.g. "Kitchen renovation").
-            budget: The budget for the project (e.g. 100000).
-
-        Returns:
-            A dictionary with the following keys:
-            - success: True if the lead ticket was created successfully, False otherwise.
-            - lead_id: The ID of the lead ticket if created successfully, None otherwise.
-            - error: The error message if the lead ticket was not created successfully, None if successful.
-        """
-
-        return {'success': True, 'lead_id': '123456', 'error': None}
-
-    @function_tool
-    async def schedule_appointment(self, context: RunContext, lead_id: str, appointment_type: str, datetime: str, notes: str):
-        """
-        Schedules an appointment (briefing call or site visit) for a new lead.
-
-        Args:
-            lead_id: The ID of the lead ticket to schedule an appointment for.
-            appointment_type: The type of appointment to schedule, must be either ("briefing_call" or "site_visit").
-            datetime: The date and time of the appointment in ISO format (e.g. "2025-06-01T10:00:00Z").
-            notes: Any additional notes for the appointment.
-
-        Returns:
-            A dictionary with the following keys:
-            - success: True if the appointment was scheduled successfully, False otherwise.
-            - appointment_id: The ID of the appointment if scheduled successfully, None otherwise.
-            - error: The error message if the appointment was not scheduled successfully, None if successful.
-        """
-
-        return {'success': True, 'appointment_id': '123456', 'error': None}
-
-    @function_tool
-    async def create_support_ticket(self, context: RunContext, project_id: str, issue_category: str, summary: str, title: str, user_email: str, user_name: str):
-        """
-        Creates a standard support ticket for an existing project query.
-        
-        Args:
-            project_id: The ID of the project to create a support ticket for.
-            issue_category: The category of the issue to create a support ticket for,(e.g., 'Status Update', 'Payment Query', 'Delay Concern').
-            summary: The summary of the issue to create a support ticket for.
-            title: The title of the support ticket to create a support ticket for.
-            user_email: The email of the user to create a support ticket for.
-            user_name: The name of the user to create a support ticket for.
-
-        Returns:
-            A dictionary with the following keys:
-            - success: True if the support ticket was created successfully, False otherwise.
-            - support_ticket_id: The ID of the support ticket if created successfully, None otherwise.
-            - error: The error message if the support ticket was not created successfully, None if successful.
-        """
-        
-        logger.info(f"Creating support ticket for {project_id} with issue category {issue_category} and summary {summary}")
-
-        response = await get_api_data_async(
-            url="https://ls-proxy.revspot.ai/fd/tickets",
-            data={
-                "title": title,
-                "description": f"{issue_category}: {summary}.",
-                "tags": ["livspace-revspot-bot"],
-                "customerData": {
-                    "email": user_email,
-                    "name": user_name
-                },
-                "projectId": project_id
-            }
+        await self.session.say("""
+        Hi, thank you for calling to Livspace. Would you like to speak in Hindi or English?"""
         )
-
-        return {'success': True, 'support_ticket_id': response['id'], 'error': None}
-
-    @function_tool
-    async def create_escalation_ticket(self, context: RunContext, project_id: str, summary: str, customer_sentiment: str):
-        """
-        Creates a high-priority escalation ticket for a serious customer complaint.
-
-        Args:
-            project_id: The ID of the project to create an escalation ticket for.
-            summary: A detailed summary of the issue (customer's complaint and demands) to create an escalation ticket for.
-            customer_sentiment: The sentiment of the customer (e.g., 'angry', 'frustrated', 'threatening social media post').
-
-        Returns:
-            A dictionary with the following keys:
-            - success: True if the escalation ticket was created successfully, False otherwise.
-            - escalation_ticket_id: The ID of the escalation ticket if created successfully, None otherwise.
-            - error: The error message if the escalation ticket was not created successfully, None if successful.
-        """
-
-        return {'success': True, 'escalation_ticket_id': '123456', 'error': None}
-
-    @function_tool
-    async def update_contact_preferences(self, context: RunContext, phone: str, action: str):
-        """
-        Updates the contact preferences for a customer by adding or removing them from the contact list.
         
-        Args:
-            phone: The phone number of the customer to update the contact preferences for.
-            action: The action to update the contact preferences for, must be either ("unsubscribe" or "delete_data").
-
-        Returns:
-            A dictionary with the following keys:
-            - success: True if the contact preferences were updated successfully, False otherwise.
-            - error: The error message if the contact preferences were not updated successfully, None if successful.
-        """
-
-        return {'success': True, 'error': None}
-
-    ##########################################################################################################################################################################################
-    # System tools
     @function_tool
     async def language_detection(self, context: RunContext, language_code: str):
         """
-        Change the conversation language when the user expresses a language preference explicitly or starts speaking in certain language (Hindi/English)
-
+        Language Detection Tool:
+        Detect the language of the user's conversation and switch the conversation language to the user's preferred language.
         Call this function when:
         - Direct requests: "Can we speak in Hindi?", "Switch to Hindi", "Let's continue in Hindi"
         - Questions about capability: "Do you speak Hindi?", "क्या आप हिंदी में बात करते हैं?"
         - Stated preferences: "I would prefer Hindi", "Hindi would be better for me"
-
-        Before calling this function, identify the target language with high confidence.
+        - Speaks in Hindi: "मुझे नया घर चाहिए"
 
         Do not call this function when user mentions the language but doesn't request to speak it.
 
-        Following languages are allowed to be selected: ["en" : English, "hi": "Hindi"]
+        Following languages are allowed to be selected: ["hi": "Hindi", "en": "English"]
         If target language is not in the list, let user know that you can't speak the target language.
-        Further responses after tool call should be in the target language.
 
         EXAMPLE FLOWS:
 
@@ -278,27 +97,34 @@ class LivspaceInboundAgent(Agent):
         User: "I not speak English, speak Hindi."
         Assistant: [language_detection function called with language="hi"] "नमस्ते, आज मैं आपको कैसे मदद कर सकता हूं?"
 
-        Example 2 (DO NOT call):
+        Example 2 (language detection):
+        Assistant: "Hi, How can I help you today?"
+        User: "मुझे नया घर चाहिए"
+        Assistant: [language_detection function called with language="hi"] "नमस्ते, आज मैं आपको कैसे मदवाई कर सकता हूं?"
+
+        Example 3 (DO NOT call):
         User: "Do people in India speak Hindi?"
         Assistant: "Yes, many people in India speak Hindi."
         """
         logger.info(f"Language detection function called with language: {language_code}")
 
         language_mapping = {
-            "en": {"elevenlabs": "en"},
-            "hi": {"elevenlabs": "hi"}
+            "hi": {"deepgram": "hi", "elevenlabs": "hi"},
+            "en": {"deepgram": "en", "elevenlabs": "en"}
         }
-        
+
         if language_code not in language_mapping:
             logger.warning(f"Unsupported language code: {language_code}")
-            return f"Sorry, I don't support the language code '{language_code}'. I can only speak English (en) or Hindi (hi)."
+            return f"Sorry, I don't support the language code '{language_code}'. I can only speak Hindi (hi) and English (en)."
 
-        tts = context.session.tts
-        if tts is not None:
-            language = language_mapping[language_code]["elevenlabs"]
-            tts.update_options(language=language)
-
-        return f"Language switched to {'Hindi' if language_code == 'hi' else 'English'}. I will now respond in this language."
+        if language_code == "hi":
+            return "Your language preference is noted", LivspaceInboundHindiAgent(chat_ctx=self.chat_ctx, user_project_details=self.user_project_details)
+        else:
+            return "Your language preference is noted", LivspaceInboundEnglishAgent(chat_ctx=self.chat_ctx, user_project_details=self.user_project_details)
+        
+        # await self.session.say(
+        #     instructions="I have noted your preference. I will now respond in this language."
+        # )
 
     @function_tool
     async def voice_mail_detection(self, context: RunContext):
@@ -341,12 +167,6 @@ class LivspaceInboundAgent(Agent):
         logger.info(f"voice mail detection function called")
 
         self._closing_task = asyncio.create_task(self.session.aclose())
-        # try:
-        #     job_ctx = get_job_context()
-        #     if job_ctx is not None:
-        #         await job_ctx.api.room.delete_room(api.DeleteRoomRequest(room=job_ctx.room.name))
-        # except Exception as e:
-        #     logger.error(f"Error during call cleanup: {str(e)}")
 
     @function_tool
     async def end_call(self, context: RunContext):
@@ -383,19 +203,13 @@ class LivspaceInboundAgent(Agent):
             [end_call function called]"""
 
         logger.info("end_call function called")
-        await context.session.generate_reply(instructions="Thank you for calling. Goodbye!", allow_interruptions=True)
+        await context.session.say(text="Thank you for calling. Goodbye!", allow_interruptions=True)
         current_speech = context.session.current_speech
         if current_speech is not None:
             await current_speech.wait_for_playout()
 
         self._closing_task = asyncio.create_task(self.session.aclose())
-        # try:
-        #     job_ctx = get_job_context()
-        #     if job_ctx is not None:
-        #         await job_ctx.api.room.delete_room(api.DeleteRoomRequest(room=job_ctx.room.name))
-        # except Exception as e:
-        #     logger.error(f"Error during call cleanup: {str(e)}")
-
+        
     def set_participant(self, participant: rtc.RemoteParticipant):
         self.participant = participant
 
@@ -564,7 +378,7 @@ async def entrypoint(ctx: JobContext):
     lkapi = api.LiveKitAPI()
     egress_id: str | None = None
 
-    agent = LivspaceInboundAgent(dial_info=dial_info, user_project_details=user_project_details)
+    agent = LivspaceLanguageSwitchAgent(dial_info=dial_info, user_project_details=user_project_details)
     # agent = LivspaceInboundAgent(dial_info=dial_info)
 
     # Start the session, which initializes the voice pipeline and warms up the models
@@ -677,4 +491,3 @@ async def entrypoint(ctx: JobContext):
 
 if __name__ == "__main__":
     cli.run_app(WorkerOptions(entrypoint_fnc=entrypoint, prewarm_fnc=prewarm, agent_name="livekit_livspace_inbound"))
-    # cli.run_app(WorkerOptions(entrypoint_fnc=entrypoint, prewarm_fnc=prewarm))
