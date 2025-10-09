@@ -118,9 +118,9 @@ class LivspaceLanguageSwitchAgent(Agent):
             return f"Sorry, I don't support the language code '{language_code}'. I can only speak Hindi (hi) and English (en)."
 
         if language_code == "hi":
-            return "Your language preference is noted", LivspaceInboundHindiAgent(chat_ctx=self.chat_ctx, user_project_details=self.user_project_details)
+            return None, LivspaceInboundHindiAgent(chat_ctx=self.chat_ctx, user_project_details=self.user_project_details)
         else:
-            return "Your language preference is noted", LivspaceInboundEnglishAgent(chat_ctx=self.chat_ctx, user_project_details=self.user_project_details)
+            return None, LivspaceInboundEnglishAgent(chat_ctx=self.chat_ctx, user_project_details=self.user_project_details)
         
         # await self.session.say(
         #     instructions="I have noted your preference. I will now respond in this language."

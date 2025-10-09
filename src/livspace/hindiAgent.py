@@ -101,14 +101,13 @@ class LivspaceInboundHindiAgent(Agent):
         return {'minimum_budget': 100000, 'error': None}
 
     @function_tool
-    async def create_lead_ticket(self, context: RunContext, name: str, phone: str, email: str, city: str, pincode: str, project_type: str, scope_summary: str, budget: int):
+    async def create_lead_ticket(self, context: RunContext, name: str, phone: str, city: str, pincode: str, project_type: str, scope_summary: str, budget: int):
         """
         Creates a new lead ticket in the CRM for a qualified potential customer.
 
         Args:
             name: The name of the customer (e.g. "John Doe").
             phone: The phone number of the customer (e.g. "9876543210").
-            email: The email of the customer (e.g. "john.doe@example.com").
             city: The city of the customer (e.g. "Bangalore").
             pincode: The pin code of the customer (e.g. "560034").
             project_type: The type of project to create a lead ticket for, must be either ("new_build" or "renovation").
