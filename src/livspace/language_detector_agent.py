@@ -277,9 +277,9 @@ async def entrypoint(ctx: JobContext):
     # Set up a voice AI pipeline using OpenAI, Cartesia, Deepgram, and the LiveKit turn detector
     session = AgentSession(
         vad=ctx.proc.userdata["vad"],
-        false_interruption_timeout=1.0,  # Wait 1 second before resuming
+        false_interruption_timeout=1,  # Wait 1 second before resuming
         resume_false_interruption=True,   # Enable auto-resume
-        preemptive_generation=True,
+        # preemptive_generation=True,
         # allow_interruptions=True,
         # min_interruption_duration=0.5,
         # min_interruption_words=2
