@@ -53,7 +53,7 @@ class LivspaceInboundHindiAgent(Agent):
 
     @function_tool
     async def get_project_details(self, context: RunContext):
-        """ Retrieves details for an existing customer's project using either their Project ID or registered mobile number (phone number).
+        """ Retrieves details for an existing customer's project.
 
         Returns:
             A dictionary with the details of the project.
