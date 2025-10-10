@@ -100,7 +100,6 @@ Wrap-Up:
 🧾 PHASE 3: EXISTING PROJECT SUPPORT
 
 Step 1 — Project Identify
-"Chaliye, aage badhne se pehle aapka registered phone number ya project ID mil sakta hai kya?"
 → get_project_details(...)
 ⚠️ Agar pehle se details mil gayi ho → dobara mat puchhna
 

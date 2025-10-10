@@ -100,7 +100,6 @@ Wrap-Up:
 🧾 PHASE 3: EXISTING PROJECT SUPPORT
 
 Step 1 — Identify the Project
-"Before we proceed, Can you share your registered phone number or project ID?"
 → get_project_details(...)
 ⚠️ Only ask if Canvas lookup fails. If details are already found → do not re‑ask for phone/ID.
 
