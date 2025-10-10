@@ -40,7 +40,15 @@ class LivspaceLanguageSwitchAgent(Agent):
             instructions="""You are a helpful voice AI assistant.
             Your job is to detect the language of the user's conversation and switch the conversation language to the user's preferred language.
             Donot try to extend the conversation for a long duration. Try to keep the conversation short and to the point.
-            You are curious, friendly, and have a sense of humor.""",
+            You are curious, friendly, and have a sense of humor.
+
+            After taking the language preference, call the language_detection function with the language code.
+            
+            GUARDRAILS:
+            - Stick to the script. If someone asks something that is not in the script, reply with "I'm sorry, I can't help with that."
+            - After taking the language preference, let the agent handle the conversation.
+            - Do not speak out errors of any tool calls.
+            """,
             stt=elevenlabs.STT(
                 language_code="en"
             ),
@@ -62,7 +70,8 @@ class LivspaceLanguageSwitchAgent(Agent):
         logger.info(f"User project details: {self.user_project_details}")
     async def on_enter(self) -> None:
         await self.session.say("""
-        Hi, thank you for calling to Livspace. Would you like to speak in Hindi or English?"""
+        Hi, thank you for calling Livspace. Would you like to speak in Hindi or English?
+        """
         )
         
     @function_tool
@@ -106,12 +115,14 @@ class LivspaceLanguageSwitchAgent(Agent):
 
         if language_code not in language_mapping:
             logger.warning(f"Unsupported language code: {language_code}")
-            return f"Sorry, I don't support the language code '{language_code}'. I can only speak Hindi (hi) and English (en)."
+            return f"Sorry, I don't support the language '{language_code}'. I can only speak Hindi (hi) and English (en)."
 
         if language_code == "hi":
-            return "Your language preference is noted", LivspaceInboundHindiAgent(chat_ctx=self.chat_ctx, user_project_details=self.user_project_details)
+            logger.info(f"SWITCHING TO HINDI AGENT")
+            return LivspaceInboundHindiAgent(chat_ctx=self.chat_ctx)
         else:
-            return "Your language preference is noted", LivspaceInboundEnglishAgent(chat_ctx=self.chat_ctx, user_project_details=self.user_project_details)
+            logger.info(f"SWITCHING TO ENGLISH AGENT")
+            return LivspaceInboundEnglishAgent(chat_ctx=self.chat_ctx)
         
         # await self.session.say(
         #     instructions="I have noted your preference. I will now respond in this language.""
@@ -218,7 +229,7 @@ async def entrypoint(ctx: JobContext):
     # Set up a voice AI pipeline using OpenAI, Cartesia, Deepgram, and the LiveKit turn detector
     session = AgentSession(
         vad=ctx.proc.userdata["vad"],
-        false_interruption_timeout=0.5,  # Wait 0.5 second before resuming
+        false_interruption_timeout=1,  # Wait 0.5 second before resuming
         resume_false_interruption=True,   # Enable auto-resume
         # preemptive_generation=True,
     )
