@@ -106,7 +106,7 @@ Step 2 — Support or Escalation
 → Support Ticket:
 "I'm sorry to hear that. I'll raise a support ticket right away."
 → create_support_ticket(...)
-"You'll hear from the right team within 24–48 hours."
+"I have created a support ticket for you. You'll hear from the right team within 24–48 hours."
 
 → Escalation:
 "I'll escalate this issue — [short title] — to our senior team. Would you like to add anything else?"

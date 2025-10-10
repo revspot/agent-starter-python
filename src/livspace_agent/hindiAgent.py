@@ -16,6 +16,7 @@ from livekit.plugins import google, elevenlabs, sarvam
 from livekit.plugins.turn_detector.multilingual import MultilingualModel
 from livspace_agent.pincodes import serviceable_pincodes
 from livspace_agent.hindiPrompt import INSTRUCTIONS
+from livspace_agent.utils.api_utils import get_api_data_async
 
 logger = logging.getLogger("livspace-inbound-hindi-agent")
 load_dotenv(".env.local")
@@ -168,7 +169,7 @@ class LivspaceInboundHindiAgent(Agent):
         return {'success': True, 'appointment_id': '123456', 'error': None}
 
     @function_tool
-    async def create_support_ticket(self, context: RunContext, project_id: str, issue_category: str, summary: str, callback_requested: bool, preferred_time: str):
+    async def create_support_ticket(self, context: RunContext, project_id: str, issue_category: str, summary: str, title: str, user_name: str):
         """
         Creates a standard support ticket for an existing project query.
         
@@ -176,8 +177,8 @@ class LivspaceInboundHindiAgent(Agent):
             project_id: The ID of the project to create a support ticket for.
             issue_category: The category of the issue to create a support ticket for,(e.g., 'Status Update', 'Payment Query', 'Delay Concern').
             summary: The summary of the issue to create a support ticket for.
-            callback_requested: Whether the customer wants to be called back.
-            preferred_time: The preferred time for the callback.
+            title: The title of the support ticket to create a support ticket for.
+            user_name: The name of the user to create a support ticket for. This can be fetched from the user_project_details.
 
         Returns:
             A dictionary with the following keys:
@@ -185,8 +186,23 @@ class LivspaceInboundHindiAgent(Agent):
             - support_ticket_id: The ID of the support ticket if created successfully, None otherwise.
             - error: The error message if the support ticket was not created successfully, None if successful.
         """
+        
+        logger.info(f"Creating support ticket for {project_id} with issue category {issue_category} and summary {summary}")
 
-        return {'success': True, 'support_ticket_id': '123456', 'error': None}
+        response = await get_api_data_async(
+            url="https://ls-proxy.revspot.ai/fd/tickets",
+            data={
+                "title": title,
+                "description": f"{issue_category}: {summary}.",
+                "tags": ["livspace-revspot-bot"],
+                "customerData": {
+                    "name": user_name
+                },
+                "projectId": project_id
+            }
+        )
+
+        return {'success': True, 'support_ticket_id': response['id'], 'error': None}
 
     @function_tool
     async def create_escalation_ticket(self, context: RunContext, project_id: str, summary: str, customer_sentiment: str):

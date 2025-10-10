@@ -109,7 +109,7 @@ Step 2 — Support / Escalation
 → Support Ticket:
 "Oh okay, main abhi support ticket raise karti hoon."
 → create_support_ticket(...)
-"Aapko 24–48 ghante mein team ka call aa jayega."
+"Maine aapke liye ticket create kar diya hai. Aapko 24–48 ghante mein team ka call aa jayega."
 
 → Escalation:
 "Is issue ko senior team ko escalate kar rahi hoon — 'design delay' jaisa short note ke saath. Aur kuch add karna chahenge?"
