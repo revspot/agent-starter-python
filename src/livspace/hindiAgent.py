@@ -16,6 +16,7 @@ from livekit.plugins import google, elevenlabs, sarvam
 from livekit.plugins.turn_detector.multilingual import MultilingualModel
 from livspace.pincodes import serviceable_pincodes
 from livspace.hindiPrompt import INSTRUCTIONS
+from utils.api_utils import get_api_data_async
 
 logger = logging.getLogger("livspace-inbound-hindi-agent")
 load_dotenv(".env.local")
@@ -50,6 +51,29 @@ class LivspaceInboundHindiAgent(Agent):
     async def on_enter(self) -> None:
         await self.session.generate_reply(instructions=INSTRUCTIONS)
         # await self.session.say("मैंने आपकी पसंद नोट कर ली है। अब मैं हिंदी में उत्तर दूँगा।", allow_interruptions=False)
+
+    @function_tool
+    async def get_project_details_by_phone_number(self, context: RunContext, phone_number: str):
+        """ Retrieves details for an existing customer's project using either their Project ID or registered mobile number (phone number).
+
+        Returns:
+            A dictionary with the details of the project.
+        """
+        logger.info(f"Getting project details for {phone_number}")
+        phone_number = phone_number.replace("+91", "") if phone_number else "8511117231"
+        user_project_details = await get_api_data_async(
+            url="https://api.livspace.com/sales/crm/api/v1/projects/search",
+            params={
+                "filters": f"(customer.phone\n=lk={phone_number})",
+                "order_by": "id:desc",
+                "count": 100,
+                "select": "id,stage.display_name,created_at,customer.email,status,city,pincode,property_name"
+            },
+            timeout=10
+        )
+        logger.info(f"Successfully fetched user_details")
+        self.user_project_details = user_project_details
+        return self.user_project_details
 
     @function_tool
     async def get_project_details(self, context: RunContext):

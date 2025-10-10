@@ -59,7 +59,7 @@ class LivspaceInboundEnglishAgent(Agent):
             A dictionary with the details of the project.
         """
         logger.info(f"Getting project details for {phone_number}")
-        phone_number = phone_number if phone_number else "8511117231"
+        phone_number = phone_number.replace("+91", "") if phone_number else "8511117231"
         user_project_details = await get_api_data_async(
             url="https://api.livspace.com/sales/crm/api/v1/projects/search",
             params={
