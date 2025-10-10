@@ -48,8 +48,8 @@ class LivspaceInboundHindiAgent(Agent):
         self.user_project_details = user_project_details
 
     async def on_enter(self) -> None:
-        # await self.sessions.generate_reply(instructions=INSTRUCTIONS)
-        await self.session.say("मैंने आपकी पसंद नोट कर ली है। अब मैं हिंदी में उत्तर दूँगा।", allow_interruptions=False)
+        await self.session.generate_reply(instructions=INSTRUCTIONS)
+        # await self.session.say("मैंने आपकी पसंद नोट कर ली है। अब मैं हिंदी में उत्तर दूँगा।", allow_interruptions=False)
 
     @function_tool
     async def get_project_details(self, context: RunContext):
