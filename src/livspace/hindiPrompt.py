@@ -150,5 +150,5 @@ Unsubscribe	update_contact_preferences(phone, action='unsubscribe')
 • Call end karne se pehle:
 "Main aur kuch help kar sakti hoon aapki?"
 • Har user ke answer ke baad filler use karo: "Great", "Samajh gaya", "Bilkul", etc.
-• Ticket raise karte waqt: Title ya description kabhi mat puchho
+• Ticket raise karte waqt: Title ya description ya status KABHI MAT PUCHNA
 """
