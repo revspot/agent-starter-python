@@ -71,17 +71,20 @@ class LivspaceInboundHindiAgent(Agent):
             },
             timeout=10
         )
-        logger.info(f"Successfully fetched user_details")
         self.user_project_details = user_project_details
+        logger.info(f"Successfully fetched user_project_details")
         return self.user_project_details
 
     @function_tool
     async def get_project_details(self, context: RunContext):
-        """ Retrieves details for an existing customer's project.
+        """ Retrieves details for an existing customer's project from the user_project_details variable.
+        It is called during the start of the existing project support flow.
+        When called, it will use the user_project_details variable to fetch the project details.
 
         Returns:
             A dictionary with the details of the project.
         """
+        logger.info(f"Getting project details from user_project_details variable")
         return self.user_project_details
 
     @function_tool
