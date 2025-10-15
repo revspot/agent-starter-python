@@ -31,7 +31,7 @@ class LivspaceInboundHindiAgent(Agent):
                 language="hi-IN",
                 model="saarika:v2.5"
             ),
-            llm=google.LLM(model="gemini-2.5-flash-lite"),
+            llm=google.LLM(model="gemini-2.5-flash"),
             tts=elevenlabs.TTS(
                 model="eleven_flash_v2_5", 
                 voice_id="90ipbRoKi4CpHXvKVtl0",
