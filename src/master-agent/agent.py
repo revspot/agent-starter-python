@@ -146,17 +146,17 @@ class MasterOutboundAgent(Agent):
 def prewarm(proc: JobProcess):
     proc.userdata["vad"] = silero.VAD.load()
 
-async def send_webhook_to_qualif(data: dict, url: str):
+async def send_webhook_to_qualif(data: dict, url: str, room_name: str):
     """Send webhook to Qualif"""
-    logger.info(f"Sending webhook to {url}")
+    logger.info(f"[room: {room_name}] - Sending webhook to {url}")
     async with aiohttp.ClientSession() as http_session:
         async with http_session.post(url, json=data) as response:
             if response.status == 200 or response.status == 201:
-                logger.info(f"Webhook sent successfully to {url}, Response: {response.status}")
+                logger.info(f"[room: {room_name}] - Webhook sent successfully to {url}, Response: {response.status}")
             else:
-                logger.error(f"Failed to send webhook: {response.status}")
+                logger.error(f"[room: {room_name}] - Failed to send webhook: {response.status}")
                 error_message = await response.text()
-                logger.error(f"Error message: {error_message}")
+                logger.error(f"[room: {room_name}] - Error message: {error_message}")
                 raise Exception(f"Webhook failed with status {response.status}: {error_message}")
 
 def get_s3_client():
@@ -176,6 +176,8 @@ def get_instructions(instructions_link: str, s3_client=None):
     if s3_client is None:
         s3_client = get_s3_client()
     response = s3_client.get_object(Bucket="livekit-agents-prompt", Key=instructions_link)
+    if not response["Body"]:
+        raise ValueError(f"No instructions found for {instructions_link}")
     return response["Body"].read().decode("utf-8")
 
 def get_llm_provider(llm_config: dict):
@@ -225,24 +227,24 @@ async def entrypoint(ctx: JobContext):
     ctx.log_context_fields = {
         "room": ctx.room.name,
     }
-    logger.info(f"connecting to room {ctx.room.name}")
+    logger.info(f"[room: {ctx.room.name}] - connecting to room")
     await ctx.connect()
     room_id = await ctx.room.sid
-    logger.info(f"connected to room {ctx.room.name}, room_id: {room_id}")
+    logger.info(f"[room: {ctx.room.name}] - connected to room, room_id: {room_id}")
 
     dial_info = json.loads(ctx.job.metadata)
     bridge_id = dial_info.get("bridge_id")
     trunk_id = dial_info.get("trunk_id")
     participant_identity = dial_info.get("phone_number")
     phone_number = dial_info.get("phone_number")
-    logger.info(f"sip_trunk_id : {trunk_id}")
+    logger.info(f"[room: {ctx.room.name}] - using sip_trunk_id : {trunk_id}")
 
     dynamic_vars = dial_info.get("dynamic_vars", {})
     customer_name = dynamic_vars.get("customer_name")
     lead_honorific = dynamic_vars.get("lead_honorific")
     greeting_time = dynamic_vars.get("greeting_time")
     salutation = dynamic_vars.get("salutation")
-    logger.info(f"Phone number: {phone_number}, Customer name: {customer_name}, Lead honorific: {lead_honorific}, Greeting time: {greeting_time}, Salutation: {salutation}")
+    logger.info(f"[room: {ctx.room.name}] - Phone number: {phone_number}, Customer name: {customer_name}, Lead honorific: {lead_honorific}, Greeting time: {greeting_time}, Salutation: {salutation}")
 
     agent_id = dial_info.get("agent_id")
     agent_config = dial_info.get("agent_config", {})
@@ -265,7 +267,7 @@ async def entrypoint(ctx: JobContext):
         vad=ctx.proc.userdata["vad"],
         false_interruption_timeout=1.0,  # Wait 1 second before resuming
         resume_false_interruption=True,   # Enable auto-resume
-        preemptive_generation=True,
+        # preemptive_generation=True,
         # allow_interruptions=True,
         # min_interruption_duration=0.5,
         # min_interruption_words=2
@@ -296,8 +298,8 @@ async def entrypoint(ctx: JobContext):
     # when it's detected, you may resume the agent's speech
     @session.on("agent_false_interruption")
     def _on_agent_false_interruption(ev: AgentFalseInterruptionEvent):
-        logger.info("false positive interruption, resuming")
-        session.generate_reply(instructions=ev.extra_instructions or NOT_GIVEN, allow_interruptions=True)
+        logger.info(f"[room: {ctx.room.name}] - false positive interruption, resuming")
+        # session.generate_reply(instructions=ev.extra_instructions or NOT_GIVEN, allow_interruptions=True)
 
     # Metrics collection, to measure pipeline performance
     # For more information, see https://docs.livekit.io/agents/build/metrics/
@@ -314,17 +316,17 @@ async def entrypoint(ctx: JobContext):
         data["event"] = "function_tools_executed"
         data["room"] = {"sid": room_id}
         url = f"https://qualif.revspot.ai/livekit/events"
-        asyncio.create_task(send_webhook_to_qualif(data, url))
-        logger.info(f"Function tools executed")
+        asyncio.create_task(send_webhook_to_qualif(data, url, ctx.room.name))
+        logger.info(f"[room: {ctx.room.name}] - Function tools executed")
     
     @session.on("close")
     def _on_close(ev: CloseEvent):
-        logger.info(f"Session closed")
+        logger.info(f"[room: {ctx.room.name}] - Session closed")
         data = ev.model_dump()
         data["event"] = "session_closed"
         data["room"] = {"sid": room_id}
         url = f"https://qualif.revspot.ai/livekit/events"
-        asyncio.create_task(send_webhook_to_qualif(data, url))
+        asyncio.create_task(send_webhook_to_qualif(data, url, ctx.room.name))
         ctx.delete_room()
     
 
@@ -344,12 +346,12 @@ async def entrypoint(ctx: JobContext):
             }
 
             url = f"https://qualif.revspot.ai/livekit/webhook_listener/{bridge_id}"
-            logger.info(f"Sending webhook to {url}")
+            logger.info(f"[room: {ctx.room.name}] - Sending webhook to {url}")
             
-            await send_webhook_to_qualif(data, url)
+            await send_webhook_to_qualif(data, url, ctx.room.name)
                 
         except Exception as e:
-            logger.error(f"Failed to send webhook: {e}")
+            logger.error(f"[room: {ctx.room.name}] - Failed to send webhook: {e}")
 
 
     ctx.add_shutdown_callback(write_room_events)
@@ -386,16 +388,16 @@ async def entrypoint(ctx: JobContext):
 
         await session_started
         participant = await ctx.wait_for_participant(identity=participant_identity)
-        logger.info(f"participant joined: {participant.identity}")
+        logger.info(f"[room: {ctx.room.name}] - participant joined: {participant.identity}")
 
         agent.set_participant(participant)
 
         try:
             res = await lkapi.egress.start_room_composite_egress(req)
             egress_id = getattr(res, "egress_id", None)
-            logger.info(f"Started egress: {egress_id}")
+            logger.info(f"[room: {ctx.room.name}] - Started egress: {egress_id}")
         except Exception as e:
-            logger.error(f"Failed to start egress: {e}")
+            logger.error(f"[room: {ctx.room.name}] - Failed to start egress: {e}")
 
         # Watchdog to ensure egress is stopped if the session ends but egress hangs
         async def _egress_watchdog():
@@ -405,11 +407,11 @@ async def entrypoint(ctx: JobContext):
                 if egress_id:
                     try:
                         await lkapi.egress.stop_egress(api.StopEgressRequest(egress_id=egress_id))
-                        logger.info(f"Watchdog stop issued for egress after timeout: {egress_id}")
+                        logger.info(f"[room: {ctx.room.name}] - Watchdog stop issued for egress after timeout: {egress_id}")
                     except Exception as stop_err:
-                        logger.warning(f"Watchdog stop failed: {stop_err}")
+                        logger.warning(f"[room: {ctx.room.name}] - Watchdog stop failed: {stop_err}")
             except Exception as err:
-                logger.warning(f"Egress watchdog error: {err}")
+                logger.warning(f"[room: {ctx.room.name}] - Egress watchdog error: {err}")
 
         asyncio.create_task(_egress_watchdog())
 
@@ -417,20 +419,20 @@ async def entrypoint(ctx: JobContext):
             if egress_id:
                 try:
                     await lkapi.egress.stop_egress(api.StopEgressRequest(egress_id=egress_id))
-                    logger.info(f"Stopped egress on close: {egress_id}")
+                    logger.info(f"[room: {ctx.room.name}] - Stopped egress on close: {egress_id}")
                 except Exception as e:
-                    logger.warning(f"Failed to stop egress on close: {e}")
+                    logger.warning(f"[room: {ctx.room.name}] - Failed to stop egress on close: {e}")
 
         ctx.add_shutdown_callback(_stop_egress_on_close)
         await lkapi.aclose()
         
     except Exception as e:
         call_status = identify_call_status(e)
-        logger.error(f"Failed to create SIP participant: {e}")
-        logger.error(f"Call Status: {call_status}")
+        logger.error(f"[room: {ctx.room.name}] - Failed to create SIP participant: {e}")
+        logger.error(f"[room: {ctx.room.name}] - Call Status: {call_status}")
 
         url = f"https://qualif.revspot.ai/livekit/webhook_listener/{bridge_id}"
-        logger.info(f"Sending webhook to {url}")
+        logger.info(f"[room: {ctx.room.name}] - Sending webhook to {url}")
 
         status_mapping = {
             "in-progress": "processing",
@@ -451,7 +453,7 @@ async def entrypoint(ctx: JobContext):
             "call_status": call_status,
             "error": str(e),
         }
-        await send_webhook_to_qualif(data, url)
+        await send_webhook_to_qualif(data, url, ctx.room.name)
         
         ctx.shutdown()
         await lkapi.aclose()
