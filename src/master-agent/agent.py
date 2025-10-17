@@ -252,6 +252,7 @@ async def entrypoint(ctx: JobContext):
     trunk_id = dial_info.get("trunk_id")
     participant_identity = dial_info.get("phone_number")
     phone_number = dial_info.get("phone_number")
+    server_url = dial_info.get("server_url", "qualif.revspot.ai")
     logger.info(f"[room: {ctx.room.name}] - using sip_trunk_id : {trunk_id}")
 
     dynamic_vars = dial_info.get("dynamic_vars", {})
@@ -330,7 +331,7 @@ async def entrypoint(ctx: JobContext):
         data = ev.model_dump()
         data["event"] = "function_tools_executed"
         data["room"] = {"sid": room_id}
-        url = f"https://qualif.revspot.ai/livekit/events"
+        url = f"https://{server_url}/livekit/events"
         asyncio.create_task(send_webhook_to_qualif(data, url, ctx.room.name))
         logger.info(f"[room: {ctx.room.name}] - Function tools executed")
 
@@ -353,7 +354,7 @@ async def entrypoint(ctx: JobContext):
         data = ev.model_dump()
         data["event"] = "session_closed"
         data["room"] = {"sid": room_id}
-        url = f"https://qualif.revspot.ai/livekit/events"
+        url = f"https://{server_url}/livekit/events"
         asyncio.create_task(send_webhook_to_qualif(data, url, ctx.room.name))
         ctx.delete_room()
     
@@ -373,7 +374,7 @@ async def entrypoint(ctx: JobContext):
                 "summary": summary.__dict__ if summary else {}
             }
 
-            url = f"https://qualif.revspot.ai/livekit/webhook_listener/{bridge_id}"
+            url = f"https://{server_url}/livekit/webhook_listener/{bridge_id}"
             logger.info(f"[room: {ctx.room.name}] - Sending webhook to {url}")
             
             await send_webhook_to_qualif(data, url, ctx.room.name)
@@ -459,7 +460,7 @@ async def entrypoint(ctx: JobContext):
         logger.error(f"[room: {ctx.room.name}] - Failed to create SIP participant: {e}")
         logger.error(f"[room: {ctx.room.name}] - Call Status: {call_status}")
 
-        url = f"https://qualif.revspot.ai/livekit/webhook_listener/{bridge_id}"
+        url = f"https://{server_url}/livekit/webhook_listener/{bridge_id}"
         logger.info(f"[room: {ctx.room.name}] - Sending webhook to {url}")
 
         status_mapping = {
