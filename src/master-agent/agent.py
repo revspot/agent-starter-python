@@ -134,7 +134,7 @@ class MasterOutboundAgent(Agent):
             [end_call function called]"""
 
         logger.info("end_call function called")
-        await context.session.generate_reply(instructions="Thank you for calling. Goodbye!", allow_interruptions=True)
+        await context.session.say("Thank you for your time. Goodbye!")
         current_speech = context.session.current_speech
         if current_speech is not None:
             await current_speech.wait_for_playout()
@@ -180,6 +180,15 @@ def get_s3_client():
 #     if not response["Body"]:
 #         raise ValueError(f"No instructions found for {instructions_link}")
 #     return response["Body"].read().decode("utf-8")
+
+def get_knowledge_base(knowledge_base_link: str, s3_client=None):
+    if s3_client is None:
+        s3_client = get_s3_client()
+    response = s3_client.get_object(Bucket="livekit-agents-knowledge-base", Key=knowledge_base_link)
+    file_content = response["Body"].read().decode("utf-8")
+    if not file_content:
+        raise ValueError(f"No knowledge base found for {knowledge_base_link}")
+    return file_content
 
 def get_llm_provider(llm_config: dict):
     if llm_config.get("provider") == "openai":
@@ -272,7 +281,10 @@ async def entrypoint(ctx: JobContext):
     enter_instructions = f"Good {greeting_time}, am I speaking with {salutation} {customer_name}?" if not agent_config.get("enter_instructions") else agent_config.get("enter_instructions")
     instructions = agent_config.get("instructions")
     instructions = instructions.replace("{{lead_honorific}}", lead_honorific)
-
+    knowledge_base_link = agent_config.get("knowledge_base_link")
+    if knowledge_base_link and knowledge_base_link != "":
+        knowledge_base = get_knowledge_base(knowledge_base_link)
+        instructions = instructions + "\n\n" + knowledge_base
 
     # Set up a voice AI pipeline using OpenAI, Cartesia, Deepgram, and the LiveKit turn detector
     session = AgentSession(
