@@ -62,7 +62,7 @@ class LivspaceInboundHindiAgent(Agent):
         logger.info(f"Getting project details for {phone_number}")
         phone_number = phone_number.replace("+91", "") if phone_number else "8511117231"
         user_project_details = await get_api_data_async(
-            url="https://api.livspace.com/sales/crm/api/v1/projects/search",
+            url="https://ls-proxy.revspot.ai/canvas/projects/search",
             params={
                 "filters": f"(customer.phone=lk={phone_number})",
                 "order_by": "id:desc",
