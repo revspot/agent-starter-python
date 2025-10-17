@@ -14,6 +14,7 @@ from livekit.agents import (
     NOT_GIVEN,
     Agent,
     AgentFalseInterruptionEvent,
+    UserStateChangedEvent,
     AgentSession,
     JobContext,
     JobProcess,
@@ -172,13 +173,13 @@ def get_s3_client():
         aws_secret_access_key=s3_secret_key,
     )
 
-def get_instructions(instructions_link: str, s3_client=None):
-    if s3_client is None:
-        s3_client = get_s3_client()
-    response = s3_client.get_object(Bucket="livekit-agents-prompt", Key=instructions_link)
-    if not response["Body"]:
-        raise ValueError(f"No instructions found for {instructions_link}")
-    return response["Body"].read().decode("utf-8")
+# def get_instructions(instructions_link: str, s3_client=None):
+#     if s3_client is None:
+#         s3_client = get_s3_client()
+#     response = s3_client.get_object(Bucket="livekit-agents-prompt", Key=instructions_link)
+#     if not response["Body"]:
+#         raise ValueError(f"No instructions found for {instructions_link}")
+#     return response["Body"].read().decode("utf-8")
 
 def get_llm_provider(llm_config: dict):
     if llm_config.get("provider") == "openai":
@@ -189,14 +190,28 @@ def get_llm_provider(llm_config: dict):
     elif llm_config.get("provider") == "google":
         return google.LLM(
             model=llm_config.get("model"),
-            temperature=llm_config.get("temperature")
+            temperature=llm_config.get("temperature"),
+            max_output_tokens=4096
         )
     else:
         raise ValueError(f"Invalid LLM provider: {llm_config.get('provider')}")
 
 def get_stt_provider(stt_config: dict):
     if stt_config.get("provider") == "deepgram":
-        return deepgram.STT()
+        return deepgram.STT(
+            model=stt_config.get("model", "nova-3"),
+            language=stt_config.get("language", "en-US"),
+            detect_language=stt_config.get("detect_language", False),
+            punctuate=stt_config.get("punctuate", True),
+            smart_format=stt_config.get("smart_format", True),
+            sample_rate=stt_config.get("sample_rate", 16000),
+            endpointing_ms=stt_config.get("endpointing_ms", 25),
+            filler_words=stt_config.get("filler_words", True),
+            keyterms=stt_config.get("keyterms", []),
+            profanity_filter=stt_config.get("profanity_filter", False),
+            numerals=stt_config.get("numerals", False),
+            enable_diarization=stt_config.get("enable_diarization", False),
+        )
     elif stt_config.get("provider") == "elevenlabs":
         return elevenlabs.STT()
     elif stt_config.get("provider") == "google":
@@ -248,13 +263,13 @@ async def entrypoint(ctx: JobContext):
 
     agent_id = dial_info.get("agent_id")
     agent_config = dial_info.get("agent_config", {})
-    instructions_link = agent_config.get("instructions")
+    # instructions_link = agent_config.get("instructions")
     model_type = agent_config.get("model_type")
     stt_config = agent_config.get("stt_config")
     tts_config = agent_config.get("tts_config")
     llm_config = agent_config.get("llm_config")
     enter_instructions = f"Good {greeting_time}, am I speaking with {salutation} {customer_name}?" if not agent_config.get("enter_instructions") else agent_config.get("enter_instructions")
-    instructions = get_instructions(instructions_link)
+    instructions = agent_config.get("instructions")
     instructions = instructions.replace("{{lead_honorific}}", lead_honorific)
 
 
@@ -265,12 +280,12 @@ async def entrypoint(ctx: JobContext):
         tts=get_tts_provider(tts_config),
         turn_detection=MultilingualModel(),
         vad=ctx.proc.userdata["vad"],
-        false_interruption_timeout=1.0,  # Wait 1 second before resuming
+        false_interruption_timeout=0.5,  # Wait 1 second before resuming
         resume_false_interruption=True,   # Enable auto-resume
         # preemptive_generation=True,
         # allow_interruptions=True,
         # min_interruption_duration=0.5,
-        # min_interruption_words=2
+        min_interruption_words=2
     )
     s3_file_name_hash = hashlib.sha256(ctx.room.name.encode('utf-8')).hexdigest()
     recording_file_name=f"call_recording_{s3_file_name_hash}.mp4"
@@ -318,6 +333,19 @@ async def entrypoint(ctx: JobContext):
         url = f"https://qualif.revspot.ai/livekit/events"
         asyncio.create_task(send_webhook_to_qualif(data, url, ctx.room.name))
         logger.info(f"[room: {ctx.room.name}] - Function tools executed")
+
+    async def user_presence_task():
+        for _ in range(3):
+            await session.generate_reply(
+                instructions="The user has been inactive. Politely check if they're still present."
+            )
+            await asyncio.sleep(10)
+        session.shutdown()
+
+    @session.on("user_state_changed")
+    def _user_state_changed(ev: UserStateChangedEvent):
+        if ev.new_state == "away":
+            asyncio.create_task(user_presence_task())
     
     @session.on("close")
     def _on_close(ev: CloseEvent):
