@@ -377,7 +377,7 @@ async def entrypoint(ctx: JobContext):
     user_project_details = await get_api_data_async(
     url="https://ls-proxy.revspot.ai/canvas/projects/search",
     params={
-        "filters": f"(customer.phone\n=lk={clean_phone_number})",
+        "filters": f"(customer.phone=lk={clean_phone_number})",
         "order_by": "id:desc",
         "count": 100,
         "select": "id,stage.display_name,created_at,customer.email,status,city,pincode,property_name"
