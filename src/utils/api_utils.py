@@ -71,7 +71,7 @@ async def get_api_data_async(
         dict or str: JSON response if available, else raw text.
     """
 
-    logger.info(f"Getting API data from {url} with params {params} and headers {headers}")
+    logger.info(f"Getting API data from {url} with params {params}")
 
     timeout = aiohttp.ClientTimeout(total=timeout)
     headers = headers or {}
@@ -82,7 +82,7 @@ async def get_api_data_async(
                 response.raise_for_status()
 
             try:
-                logger.info(f"Response from {url} with params {params} and headers {headers} is {await response.text()}")
+                logger.info(f"Response from {url} with params {params} is {await response.text()}")
                 return await response.json()
             except aiohttp.ContentTypeError:
                 return await response.text()
