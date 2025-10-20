@@ -54,8 +54,16 @@ class LivspaceInboundAgent(Agent):
         instructions = INSTRUCTIONS
         super().__init__(
             instructions=instructions,
-            stt=elevenlabs.STT(),
-            llm=google.LLM(model="gemini-2.5-flash-lite"),
+            stt=deepgram.STT(
+                language="en-US",
+                model="nova-3",
+            ),
+            llm=google.LLM(
+                model="gemini-2.5-flash",
+                location="us-central1",
+                temperature=0.0,
+                max_output_tokens=4096,
+            ),
             tts=elevenlabs.TTS(
                 model="eleven_flash_v2_5", 
                 voice_id="ZUrEGyu8GFMwnHbvLhv2",

@@ -6,10 +6,12 @@ from typing import Any
 import asyncio
 import aiohttp
 import hashlib
+import io
 
 import boto3
 from dotenv import load_dotenv
 import json
+from pypdf import PdfReader
 from livekit.agents import (
     NOT_GIVEN,
     Agent,
@@ -55,6 +57,7 @@ class MasterOutboundAgent(Agent):
 
     async def on_enter(self) -> None:
         if self.enter_instructions:
+            await asyncio.sleep(1.5)
             await self.session.generate_reply(instructions=self.enter_instructions)
 
     @function_tool
@@ -182,12 +185,67 @@ def get_s3_client():
 #     return response["Body"].read().decode("utf-8")
 
 def get_knowledge_base(knowledge_base_link: str, s3_client=None):
+    """
+    Fetch and extract content from knowledge base files stored in S3.
+    Supports both PDF and text files based on file extension.
+    
+    Args:
+        knowledge_base_link: S3 key for the knowledge base file (e.g., "Century Regalia Knowledge Bank.pdf")
+        s3_client: Optional S3 client (will create one if not provided)
+    
+    Returns:
+        str: Extracted text content from the file
+    
+    Raises:
+        ValueError: If no content is found or file type is unsupported
+    """
     if s3_client is None:
         s3_client = get_s3_client()
+    
+    # Get the file from S3
     response = s3_client.get_object(Bucket="livekit-agents-knowledge-base", Key=knowledge_base_link)
-    file_content = response["Body"].read().decode("utf-8")
-    if not file_content:
-        raise ValueError(f"No knowledge base found for {knowledge_base_link}")
+    file_body = response["Body"].read()
+    
+    # Check file extension to determine how to process
+    file_extension = knowledge_base_link.lower().split('.')[-1]
+    
+    if file_extension == 'pdf':
+        # Handle PDF files
+        try:
+            pdf_file = io.BytesIO(file_body)
+            pdf_reader = PdfReader(pdf_file)
+            
+            # Extract text from all pages
+            text_content = []
+            for page in pdf_reader.pages:
+                page_text = page.extract_text()
+                if page_text:
+                    text_content.append(page_text)
+            
+            file_content = '\n\n'.join(text_content)
+            
+            if not file_content.strip():
+                raise ValueError(f"PDF file {knowledge_base_link} contains no extractable text")
+                
+        except Exception as e:
+            logger.error(f"Failed to extract text from PDF {knowledge_base_link}: {e}")
+            raise ValueError(f"Failed to process PDF file {knowledge_base_link}: {str(e)}")
+    
+    elif file_extension in ['txt', 'text', 'md', 'markdown']:
+        # Handle text files
+        try:
+            file_content = file_body.decode("utf-8")
+        except UnicodeDecodeError as e:
+            logger.error(f"Failed to decode text file {knowledge_base_link}: {e}")
+            raise ValueError(f"Failed to decode text file {knowledge_base_link}: {str(e)}")
+    
+    else:
+        raise ValueError(f"Unsupported file type: {file_extension}. Supported types: pdf, txt, text, md, markdown")
+    
+    if not file_content or not file_content.strip():
+        raise ValueError(f"No knowledge base content found for {knowledge_base_link}")
+    
+    logger.info(f"Successfully loaded knowledge base from {knowledge_base_link} ({file_extension} format)")
     return file_content
 
 def get_llm_provider(llm_config: dict):
@@ -278,9 +336,17 @@ async def entrypoint(ctx: JobContext):
     stt_config = agent_config.get("stt_config")
     tts_config = agent_config.get("tts_config")
     llm_config = agent_config.get("llm_config")
-    enter_instructions = f"Good {greeting_time}, am I speaking with {salutation} {customer_name}?" if not agent_config.get("enter_instructions") else agent_config.get("enter_instructions")
+    
+    enter_instructions = agent_config.get("enter_instructions")
+    if enter_instructions:
+        enter_instructions = enter_instructions.format(**dynamic_vars)
+    else:
+        enter_instructions = f"Good {greeting_time}, am I speaking with {salutation} {customer_name}?"
+    
     instructions = agent_config.get("instructions")
-    instructions = instructions.replace("{{lead_honorific}}", lead_honorific)
+    # Replace all {{variable}} placeholders with actual values
+    for key, value in dynamic_vars.items():
+        instructions = instructions.replace(f"{{{{{key}}}}}", str(value))
     knowledge_base_link = agent_config.get("knowledge_base_link")
     if knowledge_base_link and knowledge_base_link != "":
         knowledge_base = get_knowledge_base(knowledge_base_link)
