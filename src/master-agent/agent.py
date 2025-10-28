@@ -25,6 +25,9 @@ from livekit.agents import (
     CloseEvent,
     RoomInputOptions,
     RunContext,
+    BackgroundAudioPlayer,
+    AudioConfig,
+    BuiltinAudioClip,
     WorkerOptions,
     cli,
     metrics
@@ -32,7 +35,7 @@ from livekit.agents import (
 
 from livekit import api, rtc
 from livekit.agents.llm import function_tool
-from livekit.plugins import openai, deepgram, google, elevenlabs, silero, noise_cancellation
+from livekit.plugins import openai, deepgram, google, elevenlabs, silero, noise_cancellation, groq
 from livekit.plugins.turn_detector.multilingual import MultilingualModel
 
 from utils.telephony_utils import identify_call_status
@@ -45,6 +48,7 @@ class MasterOutboundAgent(Agent):
                  chat_ctx=None,
                  enter_instructions=None,
                  instructions=None,
+                 exit_instructions=None,
                  dial_info=dict[str, Any]):
         self.__name__ = "livekit_master_outbound_agent"
         super().__init__(
@@ -52,13 +56,13 @@ class MasterOutboundAgent(Agent):
             chat_ctx=chat_ctx,
         )
         self.enter_instructions = enter_instructions
+        self.exit_instructions = exit_instructions
         self.dial_info = dial_info
         self.participant: rtc.RemoteParticipant | None = None
 
     async def on_enter(self) -> None:
         if self.enter_instructions:
-            await asyncio.sleep(1.5)
-            await self.session.generate_reply(instructions=self.enter_instructions)
+            await self.session.say(self.enter_instructions)
 
     @function_tool
     async def voice_mail_detection(self, context: RunContext):
@@ -137,7 +141,7 @@ class MasterOutboundAgent(Agent):
             [end_call function called]"""
 
         logger.info("end_call function called")
-        await context.session.say("Thank you for your time. Goodbye!")
+        await context.session.say(self.exit_instructions)
         current_speech = context.session.current_speech
         if current_speech is not None:
             await current_speech.wait_for_playout()
@@ -260,6 +264,11 @@ def get_llm_provider(llm_config: dict):
             temperature=llm_config.get("temperature"),
             max_output_tokens=4096
         )
+    elif llm_config.get("provider") == "groq":
+        return groq.LLM(
+            model=llm_config.get("model"),
+            temperature=llm_config.get("temperature")
+        )
     else:
         raise ValueError(f"Invalid LLM provider: {llm_config.get('provider')}")
 
@@ -336,12 +345,19 @@ async def entrypoint(ctx: JobContext):
     stt_config = agent_config.get("stt_config")
     tts_config = agent_config.get("tts_config")
     llm_config = agent_config.get("llm_config")
+    user_away_timeout = agent_config.get("user_away_timeout", 7.0)
     
     enter_instructions = agent_config.get("enter_instructions")
     if enter_instructions:
         enter_instructions = enter_instructions.format(**dynamic_vars)
     else:
         enter_instructions = f"Good {greeting_time}, am I speaking with {salutation} {customer_name}?"
+
+    exit_instructions = agent_config.get("exit_instructions")
+    if exit_instructions:
+        exit_instructions = exit_instructions.format(**dynamic_vars)
+    else:
+        exit_instructions = f"Thank you for your time {salutation} {customer_name}. Have a nice day!"
     
     instructions = agent_config.get("instructions")
     # Replace all {{variable}} placeholders with actual values
@@ -351,6 +367,9 @@ async def entrypoint(ctx: JobContext):
     if knowledge_base_link and knowledge_base_link != "":
         knowledge_base = get_knowledge_base(knowledge_base_link)
         instructions = instructions + "\n\n" + knowledge_base
+
+    # Initialize BackgroundAudioPlayer inside the async context
+    background_audio_player = BackgroundAudioPlayer()
 
     # Set up a voice AI pipeline using OpenAI, Cartesia, Deepgram, and the LiveKit turn detector
     session = AgentSession(
@@ -364,7 +383,8 @@ async def entrypoint(ctx: JobContext):
         # preemptive_generation=True,
         # allow_interruptions=True,
         # min_interruption_duration=0.5,
-        min_interruption_words=2
+        min_interruption_words=2,
+        user_away_timeout=user_away_timeout
     )
     s3_file_name_hash = hashlib.sha256(ctx.room.name.encode('utf-8')).hexdigest()
     recording_file_name=f"call_recording_{s3_file_name_hash}.mp4"
@@ -467,7 +487,7 @@ async def entrypoint(ctx: JobContext):
     lkapi = api.LiveKitAPI()
     egress_id: str | None = None
 
-    agent = MasterOutboundAgent(dial_info=dial_info, enter_instructions=enter_instructions, instructions=instructions)
+    agent = MasterOutboundAgent(dial_info=dial_info, enter_instructions=enter_instructions, exit_instructions=exit_instructions, instructions=instructions)
 
     # Start the session, which initializes the voice pipeline and warms up the models
     session_started = asyncio.create_task(
@@ -494,6 +514,9 @@ async def entrypoint(ctx: JobContext):
         )
 
         await session_started
+        await background_audio_player.start(room=ctx.room, agent_session=session)
+        background_audio_player.play(AudioConfig(BuiltinAudioClip.OFFICE_AMBIENCE, volume=2.0), loop=True)
+
         participant = await ctx.wait_for_participant(identity=participant_identity)
         logger.info(f"[room: {ctx.room.name}] - participant joined: {participant.identity}")
 
