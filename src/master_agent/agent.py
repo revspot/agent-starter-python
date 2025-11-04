@@ -464,6 +464,7 @@ async def entrypoint(ctx: JobContext):
             summary = usage_collector.get_summary() if usage_collector else None
             
             data = {
+                "agent_identifier": agent_id,
                 "conversation_id": ctx.room.name,
                 "status": "completed",
                 "room_id": room_id,

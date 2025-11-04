@@ -260,8 +260,8 @@ async def entrypoint(ctx: JobContext):
         "room_name": ctx.room.name,
     }
     job_metadata = json.loads(ctx.job.metadata)
-    logger.info(f"[room: {ctx.room.name}] -- job metadata: {job_metadata}")
-    agent_name = job_metadata.get('agent_name') 
+    agent_id = job_metadata.get('agent_id')
+    logger.info(f"[room: {ctx.room.name}] -- agent id: {agent_id}")
 
     s3_file_name_hash = hashlib.sha256(ctx.room.name.encode('utf-8')).hexdigest()
     recording_file_name=f"call_recording_{s3_file_name_hash}.mp4"
@@ -338,7 +338,7 @@ async def entrypoint(ctx: JobContext):
             summary = usage_collector.get_summary() if usage_collector else None
             
             data = {
-                "agent_identifier": agent_name,
+                "agent_identifier": agent_id,
                 "conversation_id": ctx.room.name,
                 "status": "completed",
                 "room_id": room_id,
