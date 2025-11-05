@@ -360,16 +360,20 @@ async def entrypoint(ctx: JobContext):
 
     ctx.add_shutdown_callback(write_room_events)
 
-    user_project_details = await get_api_data_async(
-        url="https://ls-proxy.revspot.ai/canvas/projects/search",
-        params={
-            "filters": f"(customer.phone=lk={clean_phone_number})",
-            "order_by": "id:desc",
-            "count": 100,
-            "select": "id,stage.display_name,created_at,customer.email,status,city,pincode,property_name"
-        },
-        timeout=10
-    )
+    try:
+        user_project_details = await get_api_data_async(
+            url="https://ls-proxy.revspot.ai/canvas/projects/search",
+            params={
+                "filters": f"(customer.phone=lk={clean_phone_number})",
+                "order_by": "id:desc",
+                "count": 100,
+                "select": "id,stage.display_name,created_at,customer.email,status,city,pincode,property_name"
+            },
+            timeout=10
+        )
+    except Exception as e:
+        user_project_details = None
+        logger.error(f"[room: {ctx.room.name}] -- Failed to get user project details: {e}")
 
     lkapi = api.LiveKitAPI()
     egress_id: str | None = None
@@ -429,5 +433,5 @@ async def entrypoint(ctx: JobContext):
     await lkapi.aclose()
 
 if __name__ == "__main__":
-    cli.run_app(WorkerOptions(entrypoint_fnc=entrypoint, prewarm_fnc=prewarm, agent_name="livspace_orchestrator_inbound_agent", job_memory_warn_mb=1024))
+    cli.run_app(WorkerOptions(entrypoint_fnc=entrypoint, prewarm_fnc=prewarm, agent_name="livspace_orchestrator_inbound_agent", job_memory_warn_mb=1024, job_memory_limit_mb=1024))
     

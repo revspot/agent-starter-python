@@ -12,7 +12,7 @@ from livekit.agents import (
 )
 
 from livekit.agents.llm import function_tool
-from livekit.plugins import google, elevenlabs, sarvam
+from livekit.plugins import google, elevenlabs, sarvam, groq
 from livekit.plugins.turn_detector.multilingual import MultilingualModel
 from livspace.pincodes import serviceable_pincodes
 from livspace.hindiPrompt import INSTRUCTIONS
@@ -31,7 +31,8 @@ class LivspaceInboundHindiAgent(Agent):
                 language="hi-IN",
                 model="saarika:v2.5"
             ),
-            llm=google.LLM(model="gemini-2.5-flash"),
+            # llm=google.LLM(model="gemini-2.5-flash"),
+            llm=groq.LLM(model="openai/gpt-oss-20b", temperature=0.4),
             tts=elevenlabs.TTS(
                 model="eleven_flash_v2_5", 
                 voice_id="90ipbRoKi4CpHXvKVtl0",
