@@ -35,7 +35,7 @@ from livekit.agents import (
 
 from livekit import api, rtc
 from livekit.agents.llm import function_tool
-from livekit.plugins import openai, deepgram, google, elevenlabs, silero, noise_cancellation, groq
+from livekit.plugins import openai, deepgram, google, elevenlabs, silero, noise_cancellation, groq, cartesia
 from livekit.plugins.turn_detector.multilingual import MultilingualModel
 
 from utils.telephony_utils import identify_call_status
@@ -306,6 +306,11 @@ def get_tts_provider(tts_config: dict):
                 speed=tts_config.get("voice_settings", {}).get("speed", 1.12)
             ),
             streaming_latency=tts_config.get("voice_settings", {}).get("streaming_latency", 4)
+        )
+    elif tts_config.get("provider") == "cartesia":
+        return cartesia.TTS(
+            model=tts_config.get("model", "sonic-2"),
+            voice=tts_config.get("voice", "default")
         )
     else:
         raise ValueError(f"Invalid TTS provider: {tts_config.get('provider')}")
