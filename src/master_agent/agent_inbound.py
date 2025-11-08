@@ -304,20 +304,28 @@ async def entrypoint(ctx: JobContext):
         loop=True
     )
 
+    # global play_handle
+    # play_handle = None
+
     # @session.on("agent_state_changed")
     # def _on_agent_state_changed(ev: AgentStateChangedEvent):
+    #     global play_handle
     #     if ev.new_state == "thinking":
-    #         background_audio_player.play(
+    #         play_handle = background_audio_player.play(
     #             AudioConfig(BuiltinAudioClip.KEYBOARD_TYPING, volume=0.4),
     #         )
+    #         # play_handle.wait_for_playout()
     #     # if ev.new_state == "idle":
     #     #     background_audio_player.play(
     #     #         AudioConfig(BuiltinAudioClip.OFFICE_AMBIENCE, volume=0.5),
     #     #     )
     #     if ev.new_state == "speaking":
-    #         background_audio_player.stop()
+    #         if play_handle is not None:
+    #             play_handle.stop()
+    #     # else:
+    #     #     play_handle.stop()
 
     # await background_audio_player.aclose()
 
 if __name__ == "__main__":
-    cli.run_app(WorkerOptions(entrypoint_fnc=entrypoint, prewarm_fnc=prewarm, agent_name="livekit_master_inbound_agent"))
+    cli.run_app(WorkerOptions(entrypoint_fnc=entrypoint, prewarm_fnc=prewarm))

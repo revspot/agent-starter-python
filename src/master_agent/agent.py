@@ -75,15 +75,10 @@ class MasterOutboundAgent(Agent):
             - Voicemail system prompts: "Please leave your name and number"
             - Generic unavailable messages: "The number you have dialed is not available"
 
-            Before calling this function:
-            - Provide a specific reason referencing the actual voicemail content heard
-
             After calling this function:
             - If a voicemail message is configured, it will be played automatically
             - The call will end immediately after the message (or immediately if no message)
             - No further conversation will take place
-
-            You must provide a specific reason for detecting voicemail that references the exact wording that indicated voicemail.
 
             EXAMPLE FLOWS:
 
@@ -98,9 +93,7 @@ class MasterOutboundAgent(Agent):
             Example 3 (DO NOT call - human response):
             Human: "Hello? Who is this?"
             Assistant: [follows system prompt and conversation objectives rather than calling voicemail_detection]
-
-            You must provide a specific reason for detecting voicemail. Never call this tool without a valid reason.
-            The reason must include a specific reference to the wording in the user message that indicates voicemail."""
+            """
 
         logger.info(f"voice mail detection function called")
 
@@ -142,9 +135,9 @@ class MasterOutboundAgent(Agent):
 
         logger.info("end_call function called")
         await context.session.say(self.exit_instructions)
-        current_speech = context.session.current_speech
-        if current_speech is not None:
-            await current_speech.wait_for_playout()
+        # current_speech = context.session.current_speech
+        # if current_speech is not None:
+        #     await current_speech.wait_for_playout()
 
         self._closing_task = asyncio.create_task(self.session.aclose())
 
@@ -283,7 +276,6 @@ def get_stt_provider(stt_config: dict):
             sample_rate=stt_config.get("sample_rate", 16000),
             endpointing_ms=stt_config.get("endpointing_ms", 25),
             filler_words=stt_config.get("filler_words", True),
-            keyterms=stt_config.get("keyterms", []),
             profanity_filter=stt_config.get("profanity_filter", False),
             numerals=stt_config.get("numerals", False),
             enable_diarization=stt_config.get("enable_diarization", False),
@@ -310,7 +302,7 @@ def get_tts_provider(tts_config: dict):
     elif tts_config.get("provider") == "cartesia":
         return cartesia.TTS(
             model=tts_config.get("model", "sonic-2"),
-            voice=tts_config.get("voice", "default")
+            voice=tts_config.get("voice_id", "default")
         )
     else:
         raise ValueError(f"Invalid TTS provider: {tts_config.get('provider')}")
