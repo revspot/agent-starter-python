@@ -57,6 +57,8 @@ class Assistant(Agent):
     async def voice_mail_detection(self, context: RunContext):
         """Detect when a call has been answered by a voicemail system rather than a human.
             Call this function when you detect that the call recipient is not available and the call has been answered by an automated voicemail system.
+            Voicemail detection should only be called in the beginning of the call, not after the user has already started speaking.
+            Donot call this function ever after the user has started speaking. 
 
             Common indicators of voicemail:
             - Automated greeting messages: "You have reached the voicemail of..."
@@ -64,15 +66,10 @@ class Assistant(Agent):
             - Voicemail system prompts: "Please leave your name and number"
             - Generic unavailable messages: "The number you have dialed is not available"
 
-            Before calling this function:
-            - Provide a specific reason referencing the actual voicemail content heard
-
             After calling this function:
             - If a voicemail message is configured, it will be played automatically
             - The call will end immediately after the message (or immediately if no message)
             - No further conversation will take place
-
-            You must provide a specific reason for detecting voicemail that references the exact wording that indicated voicemail.
 
             EXAMPLE FLOWS:
 
@@ -87,9 +84,7 @@ class Assistant(Agent):
             Example 3 (DO NOT call - human response):
             Human: "Hello? Who is this?"
             Assistant: [follows system prompt and conversation objectives rather than calling voicemail_detection]
-
-            You must provide a specific reason for detecting voicemail. Never call this tool without a valid reason.
-            The reason must include a specific reference to the wording in the user message that indicates voicemail."""
+            """
 
         logger.info(f"voice mail detection function called")
 
