@@ -65,7 +65,7 @@ class MasterOutboundAgent(Agent):
             await self.session.say(self.enter_instructions)
 
     @function_tool
-    async def voice_mail_detection(self, context: RunContext):
+    async def voice_mail_detection(self, context: RunContext, reason: str | None = None):
         """Detect when a call has been answered by a voicemail system rather than a human.
             Call this function when you detect that the call recipient is not available and the call has been answered by an automated voicemail system.
 
@@ -100,7 +100,7 @@ class MasterOutboundAgent(Agent):
         self._closing_task = asyncio.create_task(self.session.aclose())
 
     @function_tool
-    async def end_call(self, context: RunContext):
+    async def end_call(self, context: RunContext, reason: str | None = None):
         """Gracefully conclude conversations when appropriate
             Call this function when:
             1. EXPLICIT ENDINGS
