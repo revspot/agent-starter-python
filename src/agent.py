@@ -24,7 +24,7 @@ from livekit.agents import (
 )
 from livekit import api
 from livekit.agents.llm import function_tool
-from livekit.plugins import deepgram, noise_cancellation, openai, silero, google, elevenlabs
+from livekit.plugins import deepgram, noise_cancellation, openai, silero, google, elevenlabs, groq, cartesia
 from livekit.plugins.turn_detector.multilingual import MultilingualModel
 from instructions import INSTRUCTIONS
 
@@ -49,12 +49,12 @@ class Assistant(Agent):
     async def on_enter(self) -> None:
         greeting_time = "morning"
         salutation = "Mr."
-        customer_name = "Vivek"
+        customer_name = "शुभम"
         # logger.info("on_enter function called")
         await self.session.say(f"Good {greeting_time}, am I speaking with {salutation} {customer_name}?")
 
     @function_tool
-    async def voice_mail_detection(self, context: RunContext):
+    async def voice_mail_detection(self, context: RunContext, reason: str | None = None):
         """Detect when a call has been answered by a voicemail system rather than a human.
             Call this function when you detect that the call recipient is not available and the call has been answered by an automated voicemail system.
             Voicemail detection should only be called in the beginning of the call, not after the user has already started speaking.
@@ -91,7 +91,7 @@ class Assistant(Agent):
         self._closing_task = asyncio.create_task(self.session.aclose())
 
     @function_tool
-    async def end_call(self, context: RunContext):
+    async def end_call(self, context: RunContext, reason: str | None = None):
         """Gracefully conclude conversations when appropriate
             Call this function when:
             1. EXPLICIT ENDINGS
@@ -125,7 +125,7 @@ class Assistant(Agent):
             [end_call function called]"""
 
         logger.info("end_call function called")
-        await context.session.generate_reply(instructions="Thank you for calling. Goodbye!", allow_interruptions=True)
+        await context.session.say("Thank you for calling. Goodbye!")
         current_speech = context.session.current_speech
         if current_speech is not None:
             await current_speech.wait_for_playout()
@@ -148,23 +148,32 @@ async def entrypoint(ctx: JobContext):
     #     # A Large Language Model (LLM) is your agent's brain, processing user input and generating a response
     #     # See all providers at https://docs.livekit.io/agents/integrations/llm/
     #     # llm=openai.LLM(model="gpt-4o-mini"),
-        llm=google.LLM(model="gemini-2.5-flash-lite"),
+        # llm=google.LLM(model="gemini-2.5-flash-lite"),
+        llm=groq.LLM(model="openai/gpt-oss-120b", temperature=0.2),
     #     # Speech-to-text (STT) is your agent's ears, turning the user's speech into text that the LLM can understand
     #     # See all providers at https://docs.livekit.io/agents/integrations/stt/
-        stt=elevenlabs.STT(),
+        # stt=elevenlabs.STT(),
+        stt=deepgram.STT(
+            model="nova-3",
+            language="en-IN",
+        ),
     #     # Text-to-speech (TTS) is your agent's voice, turning the LLM's text into speech that the user can hear
     #     # See all providers at https://docs.livekit.io/agents/integrations/tts/
-        tts=elevenlabs.TTS(
-                model="eleven_flash_v2_5", 
-                voice_id="H8bdWZHK2OgZwTN7ponr",
-                voice_settings=elevenlabs.VoiceSettings(
-                    stability=0.5,
-                    similarity_boost=0.7,
-                    speed=1.12,
-                ),
-                streaming_latency=4
-                ),
-    #     # VAD and turn detection are used to determine when the user is speaking and when the agent should respond
+        # tts=elevenlabs.TTS(
+        #         model="eleven_flash_v2_5", 
+        #         voice_id="H8bdWZHK2OgZwTN7ponr",
+        #         voice_settings=elevenlabs.VoiceSettings(
+        #             stability=0.5,
+        #             similarity_boost=0.7,
+        #             speed=1.12,
+        #         ),
+        #         streaming_latency=4
+        #         ),
+        tts=cartesia.TTS(
+            model="sonic-3",
+            voice="22bb5a1d-627e-484a-9e0c-eeda819abb95"
+        ),
+    # #     # VAD and turn detection are used to determine when the user is speaking and when the agent should respond
     #     # See more at https://docs.livekit.io/agents/build/turns
         turn_detection=MultilingualModel(),
         vad=ctx.proc.userdata["vad"],
