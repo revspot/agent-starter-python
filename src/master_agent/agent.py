@@ -463,7 +463,8 @@ async def entrypoint(ctx: JobContext):
             data = {
                 "agent_identifier": agent_id,
                 "conversation_id": ctx.room.name,
-                "status": "completed",
+                "status": "ended",
+                "call_status": "completed",
                 "room_id": room_id,
                 "recording_url": f"https://recordings.qualif.revspot.ai/{recording_file_name}",
                 "transcript": session.history.to_dict(),
