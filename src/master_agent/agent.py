@@ -49,7 +49,7 @@ class MasterOutboundAgent(Agent):
                  enter_instructions=None,
                  instructions=None,
                  exit_instructions=None,
-                 dial_info=dict[str, Any]):
+                 dial_info: dict[str, Any]=None):
         self.__name__ = "livekit_master_outbound_agent"
         super().__init__(
             instructions=instructions,

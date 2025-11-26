@@ -8,13 +8,14 @@ import aiohttp
 import hashlib
 import io
 import json
+import uuid
 
-from dotenv import load_dotenv
 from livekit.agents import (
     NOT_GIVEN,
     Agent,
     AgentFalseInterruptionEvent,
     AgentStateChangedEvent,
+    FunctionToolsExecutedEvent,
     AgentSession,
     JobContext,
     JobProcess,
@@ -31,31 +32,58 @@ from livekit.agents import (
     cli,
     metrics,
 )
-from livekit import api
+from livekit import api, rtc
 from livekit.agents.llm import function_tool
-from livekit.plugins import deepgram, noise_cancellation, openai, silero, google, elevenlabs, groq
+from livekit.plugins import deepgram, noise_cancellation, openai, silero, google, elevenlabs, groq, cartesia
 from livekit.plugins.turn_detector.multilingual import MultilingualModel
-from master_agent.regalia import INSTRUCTIONS
+from master_agent.regalia import INSTRUCTIONS, ENTER_INSTRUCTIONS, EXIT_INSTRUCTIONS
 
 logger = logging.getLogger("agent")
 
-load_dotenv(".env.local")
-
-class Assistant(Agent):
-    def __init__(self, chat_ctx = None) -> None:
+class MasterInboundAgent(Agent):
+    def __init__(self,
+                 chat_ctx=None,
+                 enter_instructions=None,
+                 instructions=None,
+                 exit_instructions=None,
+                 dial_info: dict[str, Any]=None):
+        self.__name__ = "livekit_master_inbound_agent"
         super().__init__(
-            instructions=INSTRUCTIONS.replace("{{salutation}}", "Mr." ).replace("{{customer_name}}", "Subham").replace("{{lead_honorific}}", "Sir"),
+            instructions=instructions.replace("{{salutation}}", "Mr.").replace("{{customer_name}}", "Subham"),
+            stt=deepgram.STT(
+                model="nova-3",
+                language="en-IN",
+                detect_language=False,
+                punctuate=True,
+                smart_format=True,
+                sample_rate=16000,
+                endpointing_ms=25,
+                filler_words=True,
+                profanity_filter=False,
+                numerals=False,
+                enable_diarization=False,
+            ),
+            llm=groq.LLM(
+                model="openai/gpt-oss-120b",
+                temperature=0.4
+            ),
+            tts=cartesia.TTS(
+                model="sonic-3",
+                voice="22bb5a1d-627e-484a-9e0c-eeda819abb95"
+            ),
             chat_ctx=chat_ctx,
         )
+        self.enter_instructions = enter_instructions.replace("{{salutation}}", "Mr.").replace("{{customer_name}}", "Subham")
+        self.exit_instructions = exit_instructions.replace("{{salutation}}", "Mr.").replace("{{customer_name}}", "Subham")
+        self.dial_info = dial_info
+        self.participant: rtc.RemoteParticipant | None = None
 
     async def on_enter(self) -> None:
-        greeting_time = "morning"
-        salutation = "Mr."
-        customer_name = "Subham"
-        await self.session.say(f"Good {greeting_time}, am I speaking with {salutation} {customer_name}?")
+        if self.enter_instructions:
+            await self.session.say(self.enter_instructions)
 
     @function_tool
-    async def voice_mail_detection(self, context: RunContext):
+    async def voice_mail_detection(self, context: RunContext, reason: str | None = None):
         """Detect when a call has been answered by a voicemail system rather than a human.
             Call this function when you detect that the call recipient is not available and the call has been answered by an automated voicemail system.
 
@@ -65,15 +93,10 @@ class Assistant(Agent):
             - Voicemail system prompts: "Please leave your name and number"
             - Generic unavailable messages: "The number you have dialed is not available"
 
-            Before calling this function:
-            - Provide a specific reason referencing the actual voicemail content heard
-
             After calling this function:
             - If a voicemail message is configured, it will be played automatically
             - The call will end immediately after the message (or immediately if no message)
             - No further conversation will take place
-
-            You must provide a specific reason for detecting voicemail that references the exact wording that indicated voicemail.
 
             EXAMPLE FLOWS:
 
@@ -88,19 +111,15 @@ class Assistant(Agent):
             Example 3 (DO NOT call - human response):
             Human: "Hello? Who is this?"
             Assistant: [follows system prompt and conversation objectives rather than calling voicemail_detection]
-
-            You must provide a specific reason for detecting voicemail. Never call this tool without a valid reason.
-            The reason must include a specific reference to the wording in the user message that indicates voicemail."""
+            """
 
         logger.info(f"voice mail detection function called")
 
         self._closing_task = asyncio.create_task(self.session.aclose())
 
     @function_tool
-    async def end_call(self, reason: str, context: RunContext):
+    async def end_call(self, context: RunContext, reason: str | None = None):
         """Gracefully conclude conversations when appropriate
-            Args:
-                reason: The reason for ending the call
             Call this function when:
             1. EXPLICIT ENDINGS
             - User says goodbye variants: "bye," "see you," "that's all," etc.
@@ -132,128 +151,104 @@ class Assistant(Agent):
             Assistant: "Happy I could help with your password reset! Have a wonderful day!"
             [end_call function called]"""
 
-        logger.info(f"end_call function called with reason: {reason}")
-        await context.session.say(f"Thank you for your time Mr Das. Goodbye!", allow_interruptions=True)
+        logger.info("end_call function called")
+        await context.session.say(self.exit_instructions)
         current_speech = context.session.current_speech
         if current_speech is not None:
             await current_speech.wait_for_playout()
 
         self._closing_task = asyncio.create_task(self.session.aclose())
 
+    def set_participant(self, participant: rtc.RemoteParticipant):
+        self.participant = participant
+
 def prewarm(proc: JobProcess):
     proc.userdata["vad"] = silero.VAD.load()
 
+async def send_webhook_to_qualif(data: dict, url: str, room_name: str):
+    """Send webhook to Qualif"""
+    logger.info(f"[room: {room_name}] -- Sending webhook to {url}")
+    async with aiohttp.ClientSession() as http_session:
+        async with http_session.post(url, json=data) as response:
+            if response.status == 200 or response.status == 201:
+                logger.info(f"[room: {room_name}] -- Webhook sent successfully to {url}, Response: {response.status}")
+            else:
+                logger.error(f"[room: {room_name}] -- Failed to send webhook: {response.status}")
+                error_message = await response.text()
+                logger.error(f"[room: {room_name}] -- Error message: {error_message}")
+                raise Exception(f"[room: {room_name}] -- Webhook failed with status {response.status}: {error_message}")
+
 
 async def entrypoint(ctx: JobContext):
-    # Logging setup
-    # Add any other context you want in all log entries here
+    """Entrypoint for the agent"""
     ctx.log_context_fields = {
         "room": ctx.room.name,
     }
-    dial_info = ctx.job.metadata
-    logger.info(f"dial_info: {dial_info}")
+    logger.info(f"[room: {ctx.room.name}] -- connecting to room")
+    await ctx.connect()
+    room_id = await ctx.room.sid
+    logger.info(f"[room: {ctx.room.name}] -- connected to room, room_id: {room_id}")
+    phone_number = ctx.room.name.split("_")[1]
+    clean_phone_number = phone_number.replace("+91", "")
+    logger.info(f"[room: {ctx.room.name}] -- phone number: {phone_number}")
+    logger.info(f"[room: {ctx.room.name}] -- clean phone number: {clean_phone_number}")
+    dial_info = {
+        "phone_number": phone_number,
+        "room_name": ctx.room.name,
+    }
+    job_metadata = json.loads(ctx.job.metadata)
+    agent_id = job_metadata.get('agent_id')
+    logger.info(f"[room: {ctx.room.name}] -- agent id: {agent_id}")
 
-    for participant in ctx.room.remote_participants:
-        if participant.kind == "SIP":
-            # Extract SIP attributes
-            call_id = participant.attributes.get("sip.callID", "Unknown")
-            phone_number = participant.attributes.get("sip.phoneNumber", "Unknown")
-            call_status = participant.attributes.get("sip.callStatus", "Unknown")
+    s3_file_name_hash = hashlib.sha256(ctx.room.name.encode('utf-8')).hexdigest()
+    recording_file_name=f"call_recording_{s3_file_name_hash}.mp4"
 
-            # Log or use the extracted attributes
-            logger.info(f"SIP Call ID: {call_id}")
-            logger.info(f"Phone Number: {phone_number}")
-            logger.info(f"Call Status: {call_status}")
+    # Prepare egress request, but start only after audio is present
+    req = api.RoomCompositeEgressRequest(
+        room_name=ctx.room.name,
+        layout="grid",
+        audio_only=True,
+        file_outputs=[
+            api.EncodedFileOutput(
+                file_type=api.EncodedFileType.MP4,
+                filepath=recording_file_name,
+                s3=api.S3Upload(
+                    access_key=os.getenv("AWS_ACCESS_KEY_ID"),
+                    secret=os.getenv("AWS_SECRET_ACCESS_KEY"),
+                    bucket=os.getenv("S3_RECORDING_BUCKET"),
+                    region=os.getenv("S3_RECORDING_REGION"),   # pick your S3 bucket region
+                ),
+            ),
+        ],
+    )
 
-    # Initialize BackgroundAudioPlayer inside the async context
     background_audio_player = BackgroundAudioPlayer(
-        # thinking_sound=[
-        #     AudioConfig(BuiltinAudioClip.KEYBOARD_TYPING, volume=0.8),
-        #     AudioConfig(BuiltinAudioClip.KEYBOARD_TYPING2, volume=0.7),
-        # ],
         ambient_sound=[
             AudioConfig(BuiltinAudioClip.OFFICE_AMBIENCE, volume=0.5),
         ]
     )
 
-    # Set up a voice AI pipeline using OpenAI, Cartesia, Deepgram, and the LiveKit turn detector
     session = AgentSession(
-    #     # A Large Language Model (LLM) is your agent's brain, processing user input and generating a response
-    #     # See all providers at https://docs.livekit.io/agents/integrations/llm/
-    #     # llm=openai.LLM(model="gpt-4o-mini"),
-        llm=google.LLM(
-            model="gemini-2.5-flash",
-            temperature=0.2,
-            max_output_tokens=4096
-            ),
-        # llm=groq.LLM(
-        #     model="openai/gpt-oss-20b",
-        #     temperature=0.0,
-        #     ),
-    #     # Speech-to-text (STT) is your agent's ears, turning the user's speech into text that the LLM can understand
-    #     # See all providers at https://docs.livekit.io/agents/integrations/stt/
-        stt=deepgram.STT(
-            model="nova-3",
-            language="en-IN",
-            detect_language=False,
-            punctuate=True,
-            smart_format=True,
-            sample_rate=16000,
-            endpointing_ms=25,
-            # filler_words=False,
-            # keyterms=[],
-        ),
-    #     # Text-to-speech (TTS) is your agent's voice, turning the LLM's text into speech that the user can hear
-    #     # See all providers at https://docs.livekit.io/agents/integrations/tts/
-        tts=elevenlabs.TTS(
-                model="eleven_flash_v2_5", 
-                voice_id="pzxut4zZz4GImZNlqQ3H",
-                voice_settings=elevenlabs.VoiceSettings(
-                    stability=0.5,
-                    similarity_boost=0.7,
-                    speed=1.12,
-                ),
-                streaming_latency=4
-                ),
-    #     # VAD and turn detection are used to determine when the user is speaking and when the agent should respond
-    #     # See more at https://docs.livekit.io/agents/build/turns
-        turn_detection=MultilingualModel(),
         vad=ctx.proc.userdata["vad"],
-        false_interruption_timeout=1.0,  # Wait 0.5 second before resuming
+        false_interruption_timeout=1,  # Wait 1 second before resuming
         resume_false_interruption=True,   # Enable auto-resume
-    #     # allow the LLM to generate a response while waiting for the end of turn
-    #     # See more at https://docs.livekit.io/agents/build/audio/#preemptive-generation
-        # preemptive_generation=True,
-        min_interruption_words=2
+        min_interruption_duration=0.5,
+        min_interruption_words=2,
     )
 
-    # session = AgentSession(
-    #     llm=openai.realtime.RealtimeModel(
-    #         model="gpt-4o-realtime-preview",
-    #         # modalities=["audio, 'text"],
-    #         voice="marin",
-    #         temperature=0.8,
-    #         speed=1.10
-    #     ),
-    # )
-
-    # sometimes background noise could interrupt the agent session, these are considered false positive interruptions
-    # when it's detected, you may resume the agent's speech
-    # @session.on("agent_false_interruption")
-    # def _on_agent_false_interruption(ev: AgentFalseInterruptionEvent):
-    #     logger.info("false positive interruption, resuming")
-    #     session.generate_reply(instructions=ev.extra_instructions or NOT_GIVEN)
-
-    # Metrics collection, to measure pipeline performance
-    # For more information, see https://docs.livekit.io/agents/build/metrics/
     usage_collector = metrics.UsageCollector()
+
+    @session.on("metrics_collected")
+    def _on_metrics_collected(ev: MetricsCollectedEvent):
+        metrics.log_metrics(ev.metrics)
+        usage_collector.collect(ev.metrics)
 
     async def user_presence_task():
         for _ in range(3):
             await session.generate_reply(
                 instructions="The user has been inactive. Politely check if they're still present."
             )
-            await asyncio.sleep(5)
+            await asyncio.sleep(10)
         session.shutdown()
 
     @session.on("user_state_changed")
@@ -261,71 +256,115 @@ async def entrypoint(ctx: JobContext):
         if ev.new_state == "away":
             asyncio.create_task(user_presence_task())
 
-    @session.on("metrics_collected")
-    def _on_metrics_collected(ev: MetricsCollectedEvent):
-        metrics.log_metrics(ev.metrics)
-        usage_collector.collect(ev.metrics)
-
+    @session.on("function_tools_executed")
+    def _on_function_tools_executed(ev: FunctionToolsExecutedEvent):
+        # filename = write_event_jsonl(ev.model_dump())
+        data = ev.model_dump()
+        data["event"] = "function_tools_executed"
+        data["room"] = {"sid": room_id}
+        url = f"https://qualif.revspot.ai/livekit/events"
+        asyncio.create_task(send_webhook_to_qualif(data, url, ctx.room.name))
+        logger.info(f"Function tools executed")
+    
     @session.on("close")
     def _on_close(ev: CloseEvent):
+    #     filename = write_event_jsonl(ev.model_dump())
+        # logger.info(f"Close: {filename}")
         logger.info(f"Session closed")
+        data = ev.model_dump()
+        data["event"] = "session_closed"
+        data["room"] = {"sid": room_id}
+        url = f"https://qualif.revspot.ai/livekit/events"
+        asyncio.create_task(send_webhook_to_qualif(data, url, ctx.room.name))
         ctx.delete_room()
+        # await job_ctx.api.room.delete_room(api.DeleteRoomRequest(room=job_ctx.room.name))
+    
+
+    async def write_room_events():
+            
+        try:
+            # Get summary safely for webhook
+            summary = usage_collector.get_summary() if usage_collector else None
+            
+            data = {
+                "agent_identifier": agent_id,
+                "conversation_id": ctx.room.name,
+                "status": "completed",
+                "room_id": room_id,
+                "recording_url": f"https://recordings.qualif.revspot.ai/{recording_file_name}",
+                "transcript": session.history.to_dict(),
+                "summary": summary.__dict__ if summary else {}
+            }
+            APP_NAMESPACE = uuid.uuid5(uuid.NAMESPACE_DNS, "qualif.revvspot.ai")
+            bridge_id = uuid.uuid5(APP_NAMESPACE, f"{room_id}:{ctx.room.name}")
+
+            url = f"https://qualif.revspot.ai/livekit/webhook_listener/{bridge_id}"
+            logger.info(f"[room: {ctx.room.name}] -- Sending webhook to {url}")
+            
+            await send_webhook_to_qualif(data, url, ctx.room.name)
+                
+        except Exception as e:
+            logger.error(f"[room: {ctx.room.name}] -- Failed to send webhook: {e}")
 
 
-    # # Add a virtual avatar to the session, if desired
-    # # For other providers, see https://docs.livekit.io/agents/integrations/avatar/
-    # avatar = hedra.AvatarSession(
-    #   avatar_id="...",  # See https://docs.livekit.io/agents/integrations/avatar/hedra
-    # )
-    # # Start the avatar and wait for it to join
-    # await avatar.start(session, room=ctx.room)
+    ctx.add_shutdown_callback(write_room_events)
 
-    #Join the room and connect to the user
-    await ctx.connect()
+    lkapi = api.LiveKitAPI()
+    egress_id: str | None = None
 
-    # Start the session, which initializes the voice pipeline and warms up the models
+    agent = MasterInboundAgent(dial_info=dial_info, enter_instructions=ENTER_INSTRUCTIONS, exit_instructions=EXIT_INSTRUCTIONS, instructions=INSTRUCTIONS)
+
     await session.start(
-        agent=Assistant(),
+        agent=agent,
         room=ctx.room,
         room_input_options=RoomInputOptions(
-            # LiveKit Cloud enhanced noise cancellation
-            # - If self-hosting, omit this parameter
-            # - For telephony applications, use `BVCTelephony` for best results
-            noise_cancellation=noise_cancellation.BVC(),
+            noise_cancellation=noise_cancellation.BVCTelephony(),
         ),
     )
+
+    try:
+        res = await lkapi.egress.start_room_composite_egress(req)
+        egress_id = getattr(res, "egress_id", None)
+        logger.info(f"[room: {ctx.room.name}] -- Started egress: {egress_id}")
+    except Exception as e:
+        logger.error(f"[room: {ctx.room.name}] -- Failed to start egress: {e}")
+
+    async def _egress_watchdog():
+        try:
+            # Fixed timeout watchdog: wait 5 minutes then attempt a best-effort stop
+            await asyncio.sleep(600)
+            if egress_id:
+                try:
+                    await lkapi.egress.stop_egress(api.StopEgressRequest(egress_id=egress_id))
+                    logger.info(f"[room: {ctx.room.name}] -- Watchdog stop issued for egress after timeout: {egress_id}")
+                except Exception as stop_err:
+                    logger.warning(f"[room: {ctx.room.name}] -- Watchdog stop failed: {stop_err}")
+        except Exception as err:
+            logger.warning(f"[room: {ctx.room.name}] -- Egress watchdog error: {err}")
+
+    asyncio.create_task(_egress_watchdog())
+
+    async def _stop_egress_on_close():
+        if egress_id:
+            try:
+                await lkapi.egress.stop_egress(api.StopEgressRequest(egress_id=egress_id))
+                logger.info(f"[room: {ctx.room.name}] -- Stopped egress on close: {egress_id}")
+            except Exception as e:
+                logger.warning(f"[room: {ctx.room.name}] -- Failed to stop egress on close: {e}")
+
+    ctx.add_shutdown_callback(_stop_egress_on_close)
+
 
     await background_audio_player.start(
         room=ctx.room,
         agent_session=session,
     )
     background_audio_player.play(
-        AudioConfig(BuiltinAudioClip.OFFICE_AMBIENCE, volume=3.0),
+        AudioConfig(BuiltinAudioClip.OFFICE_AMBIENCE, volume=2.0),
         loop=True
     )
 
-    # global play_handle
-    # play_handle = None
-
-    # @session.on("agent_state_changed")
-    # def _on_agent_state_changed(ev: AgentStateChangedEvent):
-    #     global play_handle
-    #     if ev.new_state == "thinking":
-    #         play_handle = background_audio_player.play(
-    #             AudioConfig(BuiltinAudioClip.KEYBOARD_TYPING, volume=0.4),
-    #         )
-    #         # play_handle.wait_for_playout()
-    #     # if ev.new_state == "idle":
-    #     #     background_audio_player.play(
-    #     #         AudioConfig(BuiltinAudioClip.OFFICE_AMBIENCE, volume=0.5),
-    #     #     )
-    #     if ev.new_state == "speaking":
-    #         if play_handle is not None:
-    #             play_handle.stop()
-    #     # else:
-    #     #     play_handle.stop()
-
-    # await background_audio_player.aclose()
+    await lkapi.aclose()
 
 if __name__ == "__main__":
-    cli.run_app(WorkerOptions(entrypoint_fnc=entrypoint, prewarm_fnc=prewarm))
+    cli.run_app(WorkerOptions(entrypoint_fnc=entrypoint, prewarm_fnc=prewarm, agent_name="livekit_master_inbound_agent", job_memory_warn_mb=1024, job_memory_limit_mb=1024))

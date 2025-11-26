@@ -227,3 +227,12 @@ Gatsby Concierge → Gats-bee
 Crore → Crow-r
 Lakh → Lack
 """
+
+
+ENTER_INSTRUCTIONS = """
+Hi, am I speaking with {{salutation}} {{customer_name}}?
+"""
+
+EXIT_INSTRUCTIONS = """
+Thank you for your time {{salutation}} {{customer_name}}. Goodbye!
+"""
