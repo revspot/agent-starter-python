@@ -43,14 +43,14 @@ from master_agent.regalia import INSTRUCTIONS, ENTER_INSTRUCTIONS, EXIT_INSTRUCT
 logger = logging.getLogger("agent")
 load_dotenv(".env.local")
 
-class MasterInboundAgent(Agent):
+class Agent(Agent):
     def __init__(self,
                  chat_ctx=None,
                  enter_instructions=None,
                  instructions=None,
                  exit_instructions=None,
                  dial_info: dict[str, Any]=None):
-        self.__name__ = "livekit_master_inbound_agent"
+        self.__name__ = "livekit_human_transfer_agent"
         super().__init__(
             instructions=instructions.replace("{{salutation}}", "Mr.").replace("{{customer_name}}", "Subham"),
             stt=deepgram.STT(
@@ -387,7 +387,7 @@ async def entrypoint(ctx: JobContext):
     # lkapi = api.LiveKitAPI()
     # egress_id: str | None = None
 
-    agent = MasterInboundAgent(dial_info=dial_info, enter_instructions=ENTER_INSTRUCTIONS, exit_instructions=EXIT_INSTRUCTIONS, instructions=INSTRUCTIONS)
+    agent = Agent(dial_info=dial_info, enter_instructions=ENTER_INSTRUCTIONS, exit_instructions=EXIT_INSTRUCTIONS, instructions=INSTRUCTIONS)
 
     await session.start(
         agent=agent,
