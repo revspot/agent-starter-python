@@ -10,6 +10,8 @@ import io
 import json
 import uuid
 
+from datetime import datetime
+from datetime import timezone
 from dotenv import load_dotenv
 from livekit.agents import (
     NOT_GIVEN,
@@ -80,6 +82,14 @@ class Agent(Agent):
         self.exit_instructions = exit_instructions.replace("{{salutation}}", "Mr.").replace("{{customer_name}}", "Subham")
         self.dial_info = dial_info
         self.participant: rtc.RemoteParticipant | None = None
+        self.human_transfer_vars = {
+            "attempted": False,
+            "attempted_at": None,
+            "attempt_status": None,
+            "error_message": None,
+            "handover_at": None,
+            "agent_disconnected_at": None,
+        }
 
     async def on_enter(self) -> None:
         if self.enter_instructions:
@@ -130,6 +140,8 @@ class Agent(Agent):
         await context.session.say("I'll be transferring you to my team. Please hold on while I connect you.")
         job_ctx = get_job_context()
         try:
+            self.human_transfer_vars["attempted"] = True
+            self.human_transfer_vars["attempted_at"] = datetime.now(timezone.utc)
             await job_ctx.api.sip.create_sip_participant(
             api.CreateSIPParticipantRequest(
                     room_name=job_ctx.room.name,
@@ -143,15 +155,20 @@ class Agent(Agent):
 
             participant = await job_ctx.wait_for_participant(identity=transfer_to)
             logger.info(f"participant joined: {participant.identity}")
+            self.human_transfer_vars["handover_at"] = datetime.now(timezone.utc)
 
             await job_ctx.api.room.remove_participant(api.RoomParticipantIdentity(
                 room=job_ctx.room.name,
                 identity=job_ctx.room.local_participant.identity
             ))
             logger.info(f"Agent disconnected")
+            self.human_transfer_vars["agent_disconnected_at"] = datetime.now(timezone.utc)
+            self.human_transfer_vars["attempt_status"] = "success"
             logger.info(f"transferred call to {transfer_to}")
         except Exception as e:
             logger.error(f"error transferring call to {transfer_to}: {e}")
+            self.human_transfer_vars["error_message"] = str(e)
+            self.human_transfer_vars["attempt_status"] = "failed"
             await context.session.say("I'm sorry, I cannot transfer the call right now. I will schedule a callback for you.")
             self._closing_task = asyncio.create_task(self.session.aclose())
 
@@ -234,6 +251,9 @@ class Agent(Agent):
 
     def set_participant(self, participant: rtc.RemoteParticipant):
         self.participant = participant
+    
+    def get_human_transfer_vars(self):
+        return self.human_transfer_vars
 
 def prewarm(proc: JobProcess):
     proc.userdata["vad"] = silero.VAD.load()
@@ -254,17 +274,17 @@ async def send_webhook_to_qualif(data: dict, url: str, room_name: str):
 
 async def entrypoint(ctx: JobContext):
     """Entrypoint for the agent"""
-    # ctx.log_context_fields = {
-    #     "room": ctx.room.name,
-    # }
-    # logger.info(f"[room: {ctx.room.name}] -- connecting to room")
+    ctx.log_context_fields = {
+        "room": ctx.room.name,
+    }
+    logger.info(f"[room: {ctx.room.name}] -- connecting to room")
     await ctx.connect()
-    # room_id = await ctx.room.sid
-    # logger.info(f"[room: {ctx.room.name}] -- connected to room, room_id: {room_id}")
-    # phone_number = ctx.room.name.split("_")[1]
-    # clean_phone_number = phone_number.replace("+91", "")
-    # logger.info(f"[room: {ctx.room.name}] -- phone number: {phone_number}")
-    # logger.info(f"[room: {ctx.room.name}] -- clean phone number: {clean_phone_number}")
+    room_id = await ctx.room.sid
+    logger.info(f"[room: {ctx.room.name}] -- connected to room, room_id: {room_id}")
+    phone_number = ctx.room.name.split("_")[1]
+    clean_phone_number = phone_number.replace("+91", "")
+    logger.info(f"[room: {ctx.room.name}] -- phone number: {phone_number}")
+    logger.info(f"[room: {ctx.room.name}] -- clean phone number: {clean_phone_number}")
     dial_info = {
     #     "phone_number": phone_number,
         "room_name": ctx.room.name,
@@ -355,34 +375,34 @@ async def entrypoint(ctx: JobContext):
     #     # await job_ctx.api.room.delete_room(api.DeleteRoomRequest(room=job_ctx.room.name))
     
 
-    # async def write_room_events():
+    async def write_room_events():
             
-    #     try:
-    #         # Get summary safely for webhook
-    #         summary = usage_collector.get_summary() if usage_collector else None
+        try:
+            # Get summary safely for webhook
+            summary = usage_collector.get_summary() if usage_collector else None
             
-    #         data = {
-    #             "agent_identifier": agent_id,
-    #             "conversation_id": ctx.room.name,
-    #             "status": "completed",
-    #             "room_id": room_id,
-    #             "recording_url": f"https://recordings.qualif.revspot.ai/{recording_file_name}",
-    #             "transcript": session.history.to_dict(),
-    #             "summary": summary.__dict__ if summary else {}
-    #         }
-    #         APP_NAMESPACE = uuid.uuid5(uuid.NAMESPACE_DNS, "qualif.revvspot.ai")
-    #         bridge_id = uuid.uuid5(APP_NAMESPACE, f"{room_id}:{ctx.room.name}")
+            data = {
+                "agent_identifier": agent_id,
+                "conversation_id": ctx.room.name,
+                "status": "completed",
+                "room_id": room_id,
+                "recording_url": f"https://recordings.qualif.revspot.ai/{recording_file_name}",
+                "transcript": session.history.to_dict(),
+                "summary": summary.__dict__ if summary else {}
+            }
+            APP_NAMESPACE = uuid.uuid5(uuid.NAMESPACE_DNS, "qualif.revvspot.ai")
+            bridge_id = uuid.uuid5(APP_NAMESPACE, f"{room_id}:{ctx.room.name}")
 
-    #         url = f"https://qualif.revspot.ai/livekit/webhook_listener/{bridge_id}"
-    #         logger.info(f"[room: {ctx.room.name}] -- Sending webhook to {url}")
+            url = f"https://qualif.revspot.ai/livekit/webhook_listener/{bridge_id}"
+            logger.info(f"[room: {ctx.room.name}] -- Sending webhook to {url}")
             
-    #         await send_webhook_to_qualif(data, url, ctx.room.name)
+            await send_webhook_to_qualif(data, url, ctx.room.name)
                 
-    #     except Exception as e:
-    #         logger.error(f"[room: {ctx.room.name}] -- Failed to send webhook: {e}")
+        except Exception as e:
+            logger.error(f"[room: {ctx.room.name}] -- Failed to send webhook: {e}")
 
 
-    # ctx.add_shutdown_callback(write_room_events)
+    ctx.add_shutdown_callback(write_room_events)
 
     # lkapi = api.LiveKitAPI()
     # egress_id: str | None = None
