@@ -191,6 +191,7 @@ async def entrypoint(ctx: JobContext):
     agent_id = None
     agent_phone_number = None
     recording_file_name = None
+    qualif_url = "https://qualif.revspot.ai"
     
     try:
         ctx.log_context_fields = {
@@ -283,7 +284,7 @@ async def entrypoint(ctx: JobContext):
             data = ev.model_dump()
             data["event"] = "function_tools_executed"
             data["room"] = {"sid": room_id}
-            url = f"https://qualif.revspot.ai/livekit/events"
+            url = f"{qualif_url}/livekit/events"
             asyncio.create_task(send_webhook_to_qualif(data, url, ctx.room.name))
             logger.info(f"Function tools executed")
         
@@ -295,7 +296,7 @@ async def entrypoint(ctx: JobContext):
             data = ev.model_dump()
             data["event"] = "session_closed"
             data["room"] = {"sid": room_id}
-            url = f"https://qualif.revspot.ai/livekit/events"
+            url = f"{qualif_url}/livekit/events"
             asyncio.create_task(send_webhook_to_qualif(data, url, ctx.room.name))
             ctx.delete_room()
             # await job_ctx.api.room.delete_room(api.DeleteRoomRequest(room=job_ctx.room.name))
@@ -320,7 +321,7 @@ async def entrypoint(ctx: JobContext):
                 APP_NAMESPACE = uuid.uuid5(uuid.NAMESPACE_DNS, "qualif.revvspot.ai")
                 bridge_id = uuid.uuid5(APP_NAMESPACE, f"{room_id}:{ctx.room.name}")
 
-                url = f"https://qualif.revspot.ai/livekit/webhook_listener/{bridge_id}"
+                url = f"{qualif_url}/livekit/webhook_listener/{bridge_id}"
                 logger.info(f"[room: {ctx.room.name}] -- Sending webhook to {url}")
                 
                 await send_webhook_to_qualif(data, url, ctx.room.name)
